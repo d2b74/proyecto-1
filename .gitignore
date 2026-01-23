@@ -1,4 +1,16 @@
-p2p_historial.csv
-bot.log
+# Entorno
 venv/
+__pycache__/
+*.pyc
+
+# Datos recolectados
+p2p_raw.csv
+p2p_*.csv
+
+# Logs
+*.log
+
+# Temporales
+*.tmp
+*.swp
 
