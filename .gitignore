@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Entorno
+=======
+# Entornos virtuales
+>>>>>>> 79e3a85 (Add .gitignore (venv, logs, csv))
 venv/
 __pycache__/
 *.pyc
@@ -13,4 +17,17 @@ p2p_*.csv
 # Temporales
 *.tmp
 *.swp
+
+# Logs
+*.log
+
+# Datos (no versionar)
+*.csv
+
+# Cache Python
+__pycache__/
+*.pyc
+
+# Tmux (por las dudas)
+.tmux/
 
