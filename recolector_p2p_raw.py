@@ -115,4 +115,7 @@ if __name__ == "__main__":
     while True:
         recolectar()
         time.sleep(INTERVALO)
+<<<<<<< HEAD
 
+=======
+>>>>>>> f82f854 (Replace watchdog with raw collector, move legacy code)
