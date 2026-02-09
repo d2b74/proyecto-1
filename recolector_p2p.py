@@ -132,23 +132,28 @@ class ScraperDataCrudaML:
                 if anuncios:
                     for a in anuncios:
                         todos_datos.append(self.extraer_datos_anuncio(a, m_c, m_v, b_c, b_v, btc_p))
-                time.sleep(1) # Menos espera para Actions
+                time.sleep(1) 
         
         if todos_datos:
-            archivo = f"{self.config['archivo_base']}{todos_datos[0]['mes_archivo']}.csv"
-            es_nuevo = not os.path.exists(archivo)
-            with open(archivo, "a", encoding="utf-8", newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=todos_datos[0].keys())
-                if es_nuevo: writer.writeheader()
-                writer.writerows(todos_datos)
-            print(f"✅ Éxito: {len(todos_datos)} filas guardadas.")
+            # Nombre dinámico: p2p_raw_dataset_2026-02.csv
+            mes_actual = todos_datos[0]['mes_archivo']
+            nombre_archivo = f"{self.config['archivo_base']}{mes_actual}.csv"
             
-            # rclone sin '&' para que GitHub espere a que termine de subir
-            os.system("rclone copy --include '*.csv' ./ gdrive:p2p_datasets/")
-            print("🚀 Sincronización con Drive completada.")
+            # Guardamos localmente en GitHub (un archivo nuevo solo para este ciclo)
+            with open(nombre_archivo, "w", encoding="utf-8", newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=todos_datos[0].keys())
+                # NO escribimos header para que rcat --append no repita títulos en el Drive
+                writer.writerows(todos_datos)
+            
+            print(f"✅ Éxito local: {len(todos_datos)} filas preparadas.")
+            
+            # Rcat con --append: Agrega los datos al final del archivo en Drive sin descargarlo
+            comando = f"cat {nombre_archivo} | rclone rcat gdrive:p2p_datasets/{nombre_archivo} --append"
+            os.system(comando)
+            
+            print(f"🚀 Datos agregados a {nombre_archivo} en Google Drive.")
         else:
             print("⚠️ Ciclo sin datos.")
 
 if __name__ == "__main__":
-    # GitHub Actions llamará este script, hará un ciclo y se cerrará.
     ScraperDataCrudaML().ejecutar_ciclo()
