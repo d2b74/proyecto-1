@@ -2,8 +2,19 @@ name: P2P Scraper Automático
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Corre cada 5 minutos exactos
-  workflow_dispatch: # Botón para ejecutarlo a mano cuando quieras
+    # 1. LUNES A VIERNES - Horario fuerte (10:00 a 19:00 ARG)
+    - cron: '0,10,20,30,40,50 13-22 * * 1-5'
+    
+    # 2. LUNES A VIERNES - Madrugada (21:00 a 09:00 ARG)
+    - cron: '0,30 0-12,23 * * 1-5'
+    
+    # 3. SÁBADOS
+    - cron: '0,30 * * 6'
+    
+    # 4. DOMINGOS
+    - cron: '0,30 * * 0'
+
+  workflow_dispatch:
 
 jobs:
   build:
