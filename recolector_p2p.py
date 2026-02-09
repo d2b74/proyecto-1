@@ -134,15 +134,16 @@ class ScraperDataCrudaML:
                         todos_datos.append(self.extraer_datos_anuncio(a, m_c, m_v, b_c, b_v, btc_p))
                 time.sleep(1) 
         
-    
+
         if todos_datos:
                     mes_actual = todos_datos[0]['mes_archivo']
                     nombre_archivo = f"{self.config['archivo_base']}{mes_actual}.csv"
                     
-                    # Guardamos localmente (archivo temporal para esta sesión)
+                    # Guardamos localmente (sobrescribimos el temporal de esta sesión)
                     with open(nombre_archivo, "w", encoding="utf-8", newline='') as f:
                         writer = csv.DictWriter(f, fieldnames=todos_datos[0].keys())
-                        # No ponemos encabezado para que al unir no se repita
+                        # SÍ escribimos el encabezado para que el YAML sepa qué columnas hay
+                        writer.writeheader()
                         writer.writerows(todos_datos)
                     
                     print(f"✅ Éxito local: {len(todos_datos)} filas preparadas en {nombre_archivo}")
