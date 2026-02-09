@@ -134,7 +134,7 @@ class ScraperDataCrudaML:
         except: return []
 
     def ejecutar_ciclo(self):
-        print(f"🔄 Iniciando captura: {datetime.now().strftime('%H:%M:%S')}")
+        print(f"🚀 NUEVA VERSION CON APIS: {datetime.now().strftime('%H:%M:%S')}")
         m_data, b_data = self.obtener_datos_fiat_reales()
         self.cache_mep, self.cache_blue = m_data, b_data
         
