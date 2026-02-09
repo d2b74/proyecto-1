@@ -2,17 +2,17 @@ name: P2P Scraper Automático
 
 on:
   schedule:
-    # 1. LUNES A VIERNES - Horario fuerte (10:00 a 19:00 ARG)
-    - cron: '0,10,20,30,40,50 13-22 * * 1-5'
+    # Lunes a Viernes - Horario pico
+    - cron: '*/10 13-22 * * MON-FRI'
     
-    # 2. LUNES A VIERNES - Madrugada (21:00 a 09:00 ARG)
-    - cron: '0,30 0-12,23 * * 1-5'
+    # Lunes a Viernes - Madrugada
+    - cron: '*/30 0-12,23 * * MON-FRI'
     
-    # 3. SÁBADOS
-    - cron: '0,30 * * 6'
+    # Sábados
+    - cron: '*/30 * * SAT'
     
-    # 4. DOMINGOS
-    - cron: '0,30 * * 0'
+    # Domingos
+    - cron: '*/30 * * SUN'
 
   workflow_dispatch:
 
