@@ -33,8 +33,8 @@ jobs:
 
       - name: Actualizar Drive (Append Directo)
         run: |
-          # 1. Limpieza de posibles errores previos
-          rm -rf old_history.csv
+          # 1. Definir nombres únicos para esta corrida
+          TEMP_HISTORIAL="historial_${{ github.run_id }}.csv"
           
           # 2. Identificar el archivo nuevo generado hoy
           LOCAL_FILE=$(ls p2p_raw_dataset_*.csv | head -n 1)
@@ -42,17 +42,19 @@ jobs:
 
           # 3. Verificar si existe el archivo en Drive
           if rclone ls gdrive:p2p_datasets/$LOCAL_FILE; then
-            echo "El historial existe en Drive. Uniendo..."
-            # Forzamos que lo baje como archivo
-            rclone copy gdrive:p2p_datasets/$LOCAL_FILE ./old_history.csv
+            echo "El historial existe en Drive. Bajándolo como $TEMP_HISTORIAL..."
             
-            # Pegamos solo los datos (sin el encabezado) de LOCAL_FILE al historial
-            tail -n +2 $LOCAL_FILE >> old_history.csv
+            # Descargamos el archivo del Drive con el nuevo nombre único
+            rclone copyto gdrive:p2p_datasets/$LOCAL_FILE ./$TEMP_HISTORIAL
             
-            # Subimos el archivo final
-            rclone copy old_history.csv gdrive:p2p_datasets/$LOCAL_FILE
+            # Unimos los datos nuevos (saltando el encabezado) al historial
+            tail -n +2 $LOCAL_FILE >> $TEMP_HISTORIAL
+            
+            # Subimos el archivo final volviendo al nombre original
+            rclone copyto ./$TEMP_HISTORIAL gdrive:p2p_datasets/$LOCAL_FILE
           else
-            echo "No hay historial. Subiendo archivo nuevo por primera vez."
+            echo "No hay historial. Subiendo por primera vez."
             rclone copy $LOCAL_FILE gdrive:p2p_datasets/
           fi
-          echo "🚀 Proceso terminado."
+          
+          echo "🚀 Proceso terminado con éxito."
