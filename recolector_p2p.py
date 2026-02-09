@@ -32,7 +32,7 @@ class ScraperDataCrudaML:
 
 
     def obtener_btc_global(self):
-        # Lista de endpoints que acabamos de probar y sabemos que funcionan
+        import sys
         urls = [
             "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
             "https://api1.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
@@ -40,19 +40,31 @@ class ScraperDataCrudaML:
             "https://api3.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
         ]
         
+        print("🔍 Iniciando rotación de APIs para BTC...", flush=True)
+        
         for url in urls:
             try:
-                # Bajamos el timeout a 5s para que si una falla, pase rápido a la otra
-                res = requests.get(url, timeout=5)
+                # verify=False evita errores de certificados en GitHub
+                res = requests.get(url, timeout=10, verify=False) 
                 if res.status_code == 200:
                     precio = float(res.json()['price'])
-                    print(f"✅ BTC obtenido desde {url.split('/')[2]}: {precio}")
+                    print(f"✅ BTC obtenido desde {url.split('/')[2]}: {precio}", flush=True)
                     return precio
-            except:
-                print(f"⚠️ Falló conexión con {url.split('/')[2]}, intentando siguiente...")
-                continue # Salta a la siguiente URL si esta falla
+                else:
+                    print(f"⚠️ {url.split('/')[2]} respondió status {res.status_code}", flush=True)
+            except Exception as e:
+                print(f"❌ Error en {url.split('/')[2]}: {str(e)[:50]}", flush=True)
         
-        return 0.0 # Solo si fallaron las 4 devuelve 0
+        # ÚLTIMO RECURSO: CoinGecko si Binance está totalmente bloqueado
+        try:
+            print("🆘 Intentando respaldo en CoinGecko...", flush=True)
+            res = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10)
+            precio = float(res.json()['bitcoin']['usd'])
+            print(f"✅ BTC obtenido de Respaldo: {precio}", flush=True)
+            return precio
+        except: pass
+
+        return 0.0
 
     def obtener_datos_fiat_reales(self):
         url = "https://criptoya.com/api/dolar"
