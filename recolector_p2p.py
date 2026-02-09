@@ -32,14 +32,27 @@ class ScraperDataCrudaML:
 
 
     def obtener_btc_global(self):
-        for _ in range(3):  # Intenta hasta 3 veces
+        # Lista de endpoints que acabamos de probar y sabemos que funcionan
+        urls = [
+            "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+            "https://api1.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+            "https://api2.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
+            "https://api3.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
+        ]
+        
+        for url in urls:
             try:
-                res = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=10)
+                # Bajamos el timeout a 5s para que si una falla, pase rápido a la otra
+                res = requests.get(url, timeout=5)
                 if res.status_code == 200:
-                    return float(res.json()['price'])
+                    precio = float(res.json()['price'])
+                    print(f"✅ BTC obtenido desde {url.split('/')[2]}: {precio}")
+                    return precio
             except:
-                time.sleep(1) # Espera un segundo antes de volver a intentar
-        return 0.0 # Solo devuelve 0 si falló 3 veces seguidas
+                print(f"⚠️ Falló conexión con {url.split('/')[2]}, intentando siguiente...")
+                continue # Salta a la siguiente URL si esta falla
+        
+        return 0.0 # Solo si fallaron las 4 devuelve 0
 
     def obtener_datos_fiat_reales(self):
         url = "https://criptoya.com/api/dolar"
