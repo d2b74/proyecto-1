@@ -33,24 +33,33 @@ jobs:
 
       - name: Actualizar Drive (Unir datos)
         run: |
-          FILE_NAME=$(ls p2p_raw_dataset_*.csv | head -n 1)
-          echo "Archivo detectado: $FILE_NAME"
+          # 1. Identificar archivo generado por Python (datos nuevos)
+          NUEVO_DATA=$(ls p2p_raw_dataset_*.csv | head -n 1)
+          echo "Datos nuevos en: $NUEVO_DATA"
           
-          # Intentar bajar el archivo actual del Drive
-          rclone copy gdrive:p2p_datasets/$FILE_NAME ./ || true
+          # 2. Intentar bajar lo que ya está en Drive con otro nombre
+          # Lo bajamos como 'history.csv' para que no choque con el nuevo
+          rclone copy gdrive:p2p_datasets/$NUEVO_DATA ./history.csv || echo "Es un mes nuevo o archivo inexistente"
           
-          if [ -f "$FILE_NAME" ]; then
-            # Verificamos si realmente existe en el drive comparando tamaños o existencia
-            if rclone ls gdrive:p2p_datasets/$FILE_NAME; then
-              echo "El archivo ya existe en Drive, uniendo datos..."
-              mv $FILE_NAME local_new_data.csv
-              rclone copy gdrive:p2p_datasets/$FILE_NAME ./
-              cat local_new_data.csv >> $FILE_NAME
-            else
-              echo "Archivo nuevo para el mes, se subirá por primera vez."
+          if [ -f "history.csv" ]; then
+            echo "Uniendo datos... el historial existe."
+            # OPCIONAL: Verificamos que history.csv no sea un monstruo de 2GB por error
+            TAMANO=$(stat -c%s "history.csv")
+            if [ $TAMANO -gt 100000000 ]; then 
+              echo "ERROR: El archivo de Drive es demasiado grande (>100MB). Algo anda mal."
+              exit 1
             fi
+            
+            # Pegamos los datos NUEVOS al final del HISTORIAL
+            # Usamos 'tail -n +2' para no repetir los encabezados (headers)
+            tail -n +2 $NUEVO_DATA >> history.csv
+            
+            # Ahora el archivo final es history.csv, lo renombramos para subirlo
+            mv history.csv $NUEVO_DATA
+          else
+            echo "Archivo nuevo para el mes, se subirá tal cual."
           fi
           
-          # Subir el archivo final actualizado
-          rclone copy $FILE_NAME gdrive:p2p_datasets/
+          # 3. Subir el archivo final actualizado (sobrescribe el del Drive)
+          rclone copy $NUEVO_DATA gdrive:p2p_datasets/
           echo "🚀 Drive actualizado con éxito."
