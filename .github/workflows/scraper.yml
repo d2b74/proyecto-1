@@ -31,23 +31,25 @@ jobs:
       - name: Ejecutar Scraper
         run: python recolector_p2p.py
 
-      - name: Actualizar Drive (Unir datos)
+      - name: Actualizar Drive (Append Directo)
         run: |
-          NUEVO_DATA=$(ls p2p_raw_dataset_*.csv | head -n 1)
-          
-          # Intentamos bajar el historial. 
-          # Si falla por error 429, el script se detendrá aquí gracias al 'set -e' por defecto de GitHub
-          rclone copy gdrive:p2p_datasets/$NUEVO_DATA ./history.csv --drive-stop-on-upload-limit
-          
-          if [ -f "history.csv" ]; then
-            echo "Historial recuperado con éxito. Uniendo..."
-            tail -n +2 $NUEVO_DATA >> history.csv
-            mv history.csv $NUEVO_DATA
+          # 1. Identificar el archivo nuevo generado hoy
+          LOCAL_FILE=$(ls p2p_raw_dataset_*.csv | head -n 1)
+          echo "Archivo local detectado: $LOCAL_FILE"
+
+          # 2. Verificar si existe el archivo en Drive
+          # Si existe, bajamos lo viejo, le pegamos lo nuevo y subimos.
+          if rclone ls gdrive:p2p_datasets/$LOCAL_FILE; then
+            echo "El historial existe en Drive. Uniendo..."
+            rclone copy gdrive:p2p_datasets/$LOCAL_FILE ./old_history.csv
+            
+            # Pegamos solo los datos (sin el encabezado) de LOCAL_FILE al historial
+            tail -n +2 $LOCAL_FILE >> old_history.csv
+            
+            # Subimos el archivo final
+            rclone copy old_history.csv gdrive:p2p_datasets/$LOCAL_FILE
           else
-            # Si el archivo NO existe en el drive (mes nuevo), rclone no crea history.csv
-            # Solo en ese caso permitimos que suba el archivo nuevo solo.
-            echo "No se encontró historial previo. ¿Es un mes nuevo?"
+            echo "No hay historial. Subiendo archivo nuevo por primera vez."
+            rclone copy $LOCAL_FILE gdrive:p2p_datasets/
           fi
-          
-          rclone copy $NUEVO_DATA gdrive:p2p_datasets/
-          echo "🚀 Drive actualizado con éxito."
+          echo "🚀 Proceso terminado."
