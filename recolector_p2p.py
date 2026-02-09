@@ -30,32 +30,36 @@ class ScraperDataCrudaML:
     def obtener_hora_argentina(self):
         return datetime.utcnow() - timedelta(hours=3)
 
+
     def obtener_btc_global(self):
-        try:
-            res = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=10)
-            if res.status_code == 200:
-                return float(res.json()['price'])
-        except: pass
-        return 0.0
+        for _ in range(3):  # Intenta hasta 3 veces
+            try:
+                res = requests.get("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", timeout=10)
+                if res.status_code == 200:
+                    return float(res.json()['price'])
+            except:
+                time.sleep(1) # Espera un segundo antes de volver a intentar
+        return 0.0 # Solo devuelve 0 si falló 3 veces seguidas
 
     def obtener_datos_fiat_reales(self):
         url = "https://criptoya.com/api/dolar"
-        try:
-            res = self.session.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
-            if res.status_code == 200:
-                data = res.json()
-                blue_v = float(data.get('blue', {}).get('ask', 0))
-                blue_c = float(data.get('blue', {}).get('bid', 0))
-                mep_v = float(data.get('mep', {}).get('al30', {}).get('24hs', {}).get('price', 0))
-                mep_c = round(mep_v * 0.992, 2) if mep_v > 0 else 0
-                
-                if mep_v > 0: self.cache_mep = (mep_c, mep_v)
-                if blue_v > 0: self.cache_blue = (blue_c, blue_v)
-                
-                return self.cache_mep, self.cache_blue
-        except: pass
+        for _ in range(3): # Intenta hasta 3 veces
+            try:
+                res = self.session.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+                if res.status_code == 200:
+                    data = res.json()
+                    blue_v = float(data.get('blue', {}).get('ask', 0))
+                    blue_c = float(data.get('blue', {}).get('bid', 0))
+                    mep_v = float(data.get('mep', {}).get('al30', {}).get('24hs', {}).get('price', 0))
+                    mep_c = round(mep_v * 0.992, 2) if mep_v > 0 else 0
+                    
+                    if mep_v > 0: self.cache_mep = (mep_c, mep_v)
+                    if blue_v > 0: self.cache_blue = (blue_c, blue_v)
+                    
+                    return self.cache_mep, self.cache_blue
+            except:
+                time.sleep(2) # Si falla CriptoYa, esperamos 2 segundos
         return self.cache_mep, self.cache_blue
-
     def extraer_datos_anuncio(self, anuncio, mep_c, mep_v, blue_c, blue_v, btc_p):
         adv = anuncio.get("adv", {})
         advertiser = anuncio.get("advertiser", {})
