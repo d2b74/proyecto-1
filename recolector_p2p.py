@@ -134,26 +134,20 @@ class ScraperDataCrudaML:
                         todos_datos.append(self.extraer_datos_anuncio(a, m_c, m_v, b_c, b_v, btc_p))
                 time.sleep(1) 
         
+    
         if todos_datos:
-            # Nombre dinámico: p2p_raw_dataset_2026-02.csv
-            mes_actual = todos_datos[0]['mes_archivo']
-            nombre_archivo = f"{self.config['archivo_base']}{mes_actual}.csv"
-            
-            # Guardamos localmente en GitHub (un archivo nuevo solo para este ciclo)
-            with open(nombre_archivo, "w", encoding="utf-8", newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=todos_datos[0].keys())
-                # NO escribimos header para que rcat --append no repita títulos en el Drive
-                writer.writerows(todos_datos)
-            
-            print(f"✅ Éxito local: {len(todos_datos)} filas preparadas.")
-            
-            # Rcat con --append: Agrega los datos al final del archivo en Drive sin descargarlo
-            comando = f"cat {nombre_archivo} | rclone rcat gdrive:p2p_datasets/{nombre_archivo} --append"
-            os.system(comando)
-            
-            print(f"🚀 Datos agregados a {nombre_archivo} en Google Drive.")
-        else:
-            print("⚠️ Ciclo sin datos.")
-
-if __name__ == "__main__":
-    ScraperDataCrudaML().ejecutar_ciclo()
+                    mes_actual = todos_datos[0]['mes_archivo']
+                    nombre_archivo = f"{self.config['archivo_base']}{mes_actual}.csv"
+                    
+                    # Guardamos localmente (archivo temporal para esta sesión)
+                    with open(nombre_archivo, "w", encoding="utf-8", newline='') as f:
+                        writer = csv.DictWriter(f, fieldnames=todos_datos[0].keys())
+                        # No ponemos encabezado para que al unir no se repita
+                        writer.writerows(todos_datos)
+                    
+                    print(f"✅ Éxito local: {len(todos_datos)} filas preparadas en {nombre_archivo}")
+                else:
+                    print("⚠️ Ciclo sin datos.")
+        
+        if __name__ == "__main__":
+            ScraperDataCrudaML().ejecutar_ciclo()
