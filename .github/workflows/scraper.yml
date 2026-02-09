@@ -25,40 +25,36 @@ jobs:
       - name: Instalar dependencias
         run: pip install requests
 
-      - name: Configurar Rclone
+      - name: Configurar Rclone (Modo Base64)
         run: |
           sudo apt-get install rclone
           mkdir -p ~/.config/rclone
-          echo "${{ secrets.RCLONE_CONFIG }}" > ~/.config/rclone/rclone.conf
+          # Aquí decodificamos el secreto para que rclone lea el archivo original sin errores
+          echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > ~/.config/rclone/rclone.conf
 
       - name: Ejecutar Scraper
         run: python recolector_p2p.py
 
       - name: Actualizar Drive (Unir datos)
         run: |
-          # 1. Identificar el nombre del archivo que generó Python
           FILE_NAME=$(ls p2p_raw_dataset_*.csv | head -n 1)
           echo "Archivo detectado: $FILE_NAME"
           
-          # 2. Intentar bajar el archivo actual del Drive y renombrarlo a 'drive_version.csv'
-          # Usamos '|| true' para que si el archivo no existe (mes nuevo), el script no falle
-          rclone copy gdrive:p2p_datasets/$FILE_NAME ./ --include "$FILE_NAME" || true
+          # Intentar bajar el archivo actual del Drive
+          rclone copy gdrive:p2p_datasets/$FILE_NAME ./ || true
           
           if [ -f "$FILE_NAME" ]; then
+            # Verificamos si realmente existe en el drive comparando tamaños o existencia
             if rclone ls gdrive:p2p_datasets/$FILE_NAME; then
               echo "El archivo ya existe en Drive, uniendo datos..."
-              # Renombramos el que bajamos de Drive para que no choque con el nuevo
-              mv $FILE_NAME drive_version.csv
-              # El de Python (que acabamos de generar) se llama igual que FILE_NAME
-              # Lo pegamos al final de la versión de Drive
-              cat $FILE_NAME >> drive_version.csv
-              # Ahora la versión final es drive_version
-              mv drive_version.csv $FILE_NAME
+              mv $FILE_NAME local_new_data.csv
+              rclone copy gdrive:p2p_datasets/$FILE_NAME ./
+              cat local_new_data.csv >> $FILE_NAME
             else
               echo "Archivo nuevo para el mes, se subirá por primera vez."
             fi
           fi
           
-          # 3. Subir el archivo final actualizado (reemplaza al anterior)
+          # Subir el archivo final actualizado
           rclone copy $FILE_NAME gdrive:p2p_datasets/
           echo "🚀 Drive actualizado con éxito."
