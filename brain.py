@@ -354,3 +354,9 @@ class OrquestadorSystemBrain:
             print(f"• [ALERTA] 📊 Brecha MEP muy desviada de su media: {macro['distancia_media_brecha']:+.2f}%")
 
         print("█" * 70 + "\n")
+
+
+if __name__ == "__main__":
+    from config import CONFIG
+    brain = OrquestadorSystemBrain(CONFIG)
+    brain.ejecutar_ciclo()
