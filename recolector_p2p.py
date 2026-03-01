@@ -1,20 +1,27 @@
 import requests
 import json
 import time
-import csv
 import os
+import pandas as pd
 from datetime import datetime, timedelta
 
-class ScraperDataCrudaML:
-    def __init__(self):
+class Collector:
+    """
+    Recolecta datos P2P de Binance (USDT/USDC) junto con MEP, Blue y BTC.
+    Guarda cada ciclo en un archivo Parquet individual en:
+        DATA_ROOT/raw/YYYY-MM/p2p_YYYYMMDD_HHMM.parquet
+    """
+    def __init__(self, data_root=None):
         self.config = {
             "monedas": ["USDT", "USDC"],
             "max_anuncios": 20,
-            "intervalo": 300, 
-            "archivo_base": "p2p_raw_dataset_"
+            "intervalo": 300,
         }
         self.cache_mep = (0.0, 0.0)
         self.cache_blue = (0.0, 0.0)
+        self.data_root = data_root or '/content/drive/MyDrive/data_pool'
+        self.raw_base = os.path.join(self.data_root, 'raw')
+        os.makedirs(self.raw_base, exist_ok=True)
         
         self.session = requests.Session()
         self.headers = {
@@ -26,49 +33,32 @@ class ScraperDataCrudaML:
             "Referer": "https://p2p.binance.com/es/trade/all-payments/USDT?fiat=ARS",
             "Cache-Control": "no-cache"
         }
-        
+
     def obtener_hora_argentina(self):
         return datetime.utcnow() - timedelta(hours=3)
 
-
     def obtener_btc_global(self):
-        import sys
         urls = [
             "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
             "https://api1.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
             "https://api2.binance.com/api/v3/ticker/price?symbol=BTCUSDT",
-            "https://api3.binance.com/api/v3/ticker/price?symbol=BTCUSDT"
         ]
-        
-        print("🔍 Iniciando rotación de APIs para BTC...", flush=True)
-        
         for url in urls:
             try:
-                # verify=False evita errores de certificados en GitHub
-                res = requests.get(url, timeout=10, verify=False) 
+                res = requests.get(url, timeout=10, verify=False)
                 if res.status_code == 200:
-                    precio = float(res.json()['price'])
-                    print(f"✅ BTC obtenido desde {url.split('/')[2]}: {precio}", flush=True)
-                    return precio
-                else:
-                    print(f"⚠️ {url.split('/')[2]} respondió status {res.status_code}", flush=True)
-            except Exception as e:
-                print(f"❌ Error en {url.split('/')[2]}: {str(e)[:50]}", flush=True)
-        
-        # ÚLTIMO RECURSO: CoinGecko si Binance está totalmente bloqueado
+                    return float(res.json()['price'])
+            except:
+                continue
         try:
-            print("🆘 Intentando respaldo en CoinGecko...", flush=True)
             res = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", timeout=10)
-            precio = float(res.json()['bitcoin']['usd'])
-            print(f"✅ BTC obtenido de Respaldo: {precio}", flush=True)
-            return precio
-        except: pass
-
-        return 0.0
+            return float(res.json()['bitcoin']['usd'])
+        except:
+            return 0.0
 
     def obtener_datos_fiat_reales(self):
         url = "https://criptoya.com/api/dolar"
-        for _ in range(3): # Intenta hasta 3 veces
+        for _ in range(3):
             try:
                 res = self.session.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
                 if res.status_code == 200:
@@ -77,20 +67,20 @@ class ScraperDataCrudaML:
                     blue_c = float(data.get('blue', {}).get('bid', 0))
                     mep_v = float(data.get('mep', {}).get('al30', {}).get('24hs', {}).get('price', 0))
                     mep_c = round(mep_v * 0.992, 2) if mep_v > 0 else 0
-                    
-                    if mep_v > 0: self.cache_mep = (mep_c, mep_v)
-                    if blue_v > 0: self.cache_blue = (blue_c, blue_v)
-                    
+                    if mep_v > 0:
+                        self.cache_mep = (mep_c, mep_v)
+                    if blue_v > 0:
+                        self.cache_blue = (blue_c, blue_v)
                     return self.cache_mep, self.cache_blue
             except:
-                time.sleep(2) # Si falla CriptoYa, esperamos 2 segundos
+                time.sleep(2)
         return self.cache_mep, self.cache_blue
+
     def extraer_datos_anuncio(self, anuncio, mep_c, mep_v, blue_c, blue_v, btc_p):
         adv = anuncio.get("adv", {})
         advertiser = anuncio.get("advertiser", {})
         metodos = adv.get("tradeMethods", [])
         ahora = self.obtener_hora_argentina()
-        
         return {
             "timestamp": ahora.strftime("%Y-%m-%d %H:%M:%S"),
             "mes_archivo": ahora.strftime("%Y-%m"),
@@ -143,40 +133,44 @@ class ScraperDataCrudaML:
             res = self.session.post(url, json=payload, headers=self.headers, timeout=15)
             if res.status_code == 200:
                 return res.json().get("data", [])
-        except: return []
+        except:
+            return []
 
     def ejecutar_ciclo(self):
-        print(f"🚀 NUEVA VERSION CON APIS: {datetime.now().strftime('%H:%M:%S')}")
         m_data, b_data = self.obtener_datos_fiat_reales()
         self.cache_mep, self.cache_blue = m_data, b_data
-        
-        todos_datos = []
         btc_p = self.obtener_btc_global()
         m_c, m_v = self.cache_mep
         b_c, b_v = self.cache_blue
-        
+
+        todos_datos = []
         for moneda in self.config["monedas"]:
             for lado in ["BUY", "SELL"]:
                 anuncios = self.obtener_anuncios(moneda, lado)
                 if anuncios:
                     for a in anuncios:
                         todos_datos.append(self.extraer_datos_anuncio(a, m_c, m_v, b_c, b_v, btc_p))
-                time.sleep(1) 
-                
+                time.sleep(1)
+
         if todos_datos:
-            mes_actual = todos_datos[0]['mes_archivo']
-            nombre_archivo = f"{self.config['archivo_base']}{mes_actual}.csv"
-            
-            # Guardamos localmente (sobrescribimos el temporal de esta sesión)
-            with open(nombre_archivo, "w", encoding="utf-8", newline='') as f:
-                writer = csv.DictWriter(f, fieldnames=todos_datos[0].keys())
-                # SÍ escribimos el encabezado para que el YAML sepa qué columnas hay
-                writer.writeheader()
-                writer.writerows(todos_datos)
-            
-            print(f"✅ Éxito local: {len(todos_datos)} filas preparadas en {nombre_archivo}")
+            df = pd.DataFrame(todos_datos)
+            # Obtener año-mes del primer registro (todos tienen el mismo mes)
+            mes = df['mes_archivo'].iloc[0]
+            # Crear subcarpeta por mes
+            mes_path = os.path.join(self.raw_base, mes)
+            os.makedirs(mes_path, exist_ok=True)
+            # Nombre de archivo con timestamp completo
+            timestamp_str = self.obtener_hora_argentina().strftime("%Y%m%d_%H%M")
+            filename = f"p2p_{timestamp_str}.parquet"
+            filepath = os.path.join(mes_path, filename)
+            df.to_parquet(filepath, engine='pyarrow', compression='snappy', index=False)
+            # Opcional: guardar el último archivo generado en la raíz raw (para referencia)
+            with open(os.path.join(self.raw_base, "ultimo.txt"), "w") as f:
+                f.write(f"{mes}/{filename}")
+            print(f"✅ {mes}/{filename} guardado ({len(df)} filas)")
         else:
-            print("⚠️ Ciclo sin datos.")
+            print("⚠️ Sin datos.")
 
 if __name__ == "__main__":
-    ScraperDataCrudaML().ejecutar_ciclo()
+    collector = Collector()
+    collector.ejecutar_ciclo()
