@@ -111,3 +111,8 @@ class DataConsolidator:
             self._update_last_processed(files_to_process[-1])
 
         print(f"✅ Consolidación completada. Master en: {self.master_file}")
+        
+if __name__ == "__main__":
+    from config import CONFIG
+    consolidator = DataConsolidator(CONFIG)
+    consolidator.run_update()
