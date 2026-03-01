@@ -2,15 +2,16 @@ import pandas as pd
 import glob
 import os
 from datetime import datetime
+from config import CONFIG
 
 class DataConsolidator:
     def __init__(self, cfg):
         self.cfg = cfg
         self.asset = cfg.get('asset', 'USDT').upper()
         self.data_root = cfg['DATA_ROOT']
-        self.raw_path = cfg['path_datasets']          
+        self.raw_path = cfg['path_datasets']          # debe apuntar a la carpeta raw
         self.base_path = os.path.join(self.data_root, self.asset)
-        self.master_file = os.path.join(self.base_path, 'master.parquet') 
+        self.master_file = os.path.join(self.base_path, 'master.parquet')
         self.control_file = os.path.join(self.base_path, '.last')
 
         os.makedirs(self.base_path, exist_ok=True)
@@ -30,11 +31,14 @@ class DataConsolidator:
         # Búsqueda recursiva en todas las subcarpetas de raw
         pattern = os.path.join(self.raw_path, '**', 'p2p_*.parquet')
         all_files = sorted(glob.glob(pattern, recursive=True))
+        print(f"📁 Archivos raw encontrados: {len(all_files)}")
         last = self._get_last_processed()
         if last is None:
             return all_files
         last_abs = os.path.join(self.raw_path, last)
-        return [f for f in all_files if f > last_abs]
+        new_files = [f for f in all_files if f > last_abs]
+        print(f"🆕 Archivos nuevos: {len(new_files)}")
+        return new_files
 
     def run_update(self, force_all=False):
         print(f"🔍 [DataConsolidator] Buscando actualizaciones para {self.asset}...")
@@ -51,6 +55,7 @@ class DataConsolidator:
 
         new_data = []
         for f in files_to_process:
+            print(f"📄 Procesando {f}...")
             try:
                 df_temp = pd.read_parquet(f)
             except Exception as e:
