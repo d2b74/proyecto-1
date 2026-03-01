@@ -2,14 +2,14 @@ name: Pipeline P2P Completo
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # cada 5 minutos (con la precisión que GitHub permita)
-  workflow_dispatch:        # permite ejecución manual
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout código
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Configurar Python
@@ -26,57 +26,36 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > ~/.config/rclone/rclone.conf
 
-      - name: Crear carpeta local de trabajo
-        run: mkdir -p ml_engine
-
-      - name: Descargar datos existentes desde Drive
+      - name: Descargar datos desde Drive
         run: |
-          echo "📥 Descargando estructura actual desde Drive..."
-          rclone copy gdrive:p2p_datasets/ ./ml_engine/ --verbose
-        continue-on-error: true   # si es primera vez, no falla
+          rclone copy gdrive:p2p_datasets/ ./ --verbose
+        continue-on-error: true
 
       - name: Ejecutar Scraper
         run: python recolector_p2p.py
         env:
-          DATA_ROOT: ${{ github.workspace }}/ml_engine
+          DATA_ROOT: ${{ github.workspace }}
 
-      - name: Ejecutar Manager (DataConsolidator)
+      - name: Ejecutar Manager
         run: python manager.py
         env:
-          DATA_ROOT: ${{ github.workspace }}/ml_engine
+          DATA_ROOT: ${{ github.workspace }}
 
       - name: Ejecutar Micro
         run: python micro.py
         env:
-          DATA_ROOT: ${{ github.workspace }}/ml_engine
+          DATA_ROOT: ${{ github.workspace }}
 
       - name: Ejecutar Macro
         run: python macro.py
         env:
-          DATA_ROOT: ${{ github.workspace }}/ml_engine
+          DATA_ROOT: ${{ github.workspace }}
 
-      - name: Ejecutar Brain (Orquestador)
+      - name: Ejecutar Brain
         run: python brain.py
         env:
-          DATA_ROOT: ${{ github.workspace }}/ml_engine
+          DATA_ROOT: ${{ github.workspace }}
 
-          
-      - name: Verificar configuración de rclone
+      - name: Subir a Drive
         run: |
-          echo "Remotes configurados:"
-          rclone listremotes
-          echo "Probando acceso a gdrive:"
-          rclone about gdrive: || echo "❌ No se pudo acceder a gdrive"
-      
-      - name: Listar archivos locales antes de subir
-        run: |
-          echo "Contenido de ml_engine/raw:"
-          find ml_engine/raw -type f -name "*.parquet" | head -20
-          echo "Total archivos Parquet en raw: $(find ml_engine/raw -name "*.parquet" | wc -l)"
-          echo "Contenido de ml_engine/USDT:"
-          ls -la ml_engine/USDT/ || echo "Carpeta USDT vacía o no existe"
-          
-      - name: Subir todo a Drive
-        run: |
-          echo "📤 Sincronizando cambios con Drive..."
-          rclone sync ./ml_engine/ gdrive:p2p_datasets/ --verbose
+          rclone sync ./ gdrive:p2p_datasets/ --verbose --exclude ".git/**" --exclude ".github/**"
