@@ -1,12 +1,12 @@
-name: P2P Scraper Automático
+name: Pipeline P2P Completo
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    - cron: '*/5 * * * *'   # cada 5 minutos (con la precisión que GitHub permita)
+  workflow_dispatch:        # permite ejecución manual
 
 jobs:
-  build:
+  run:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout código
@@ -20,25 +20,47 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      - name: Configurar Rclone (Modo Base64)
+      - name: Configurar Rclone
         run: |
           sudo apt-get install rclone
           mkdir -p ~/.config/rclone
           echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > ~/.config/rclone/rclone.conf
 
+      - name: Crear carpeta local de trabajo
+        run: mkdir -p ml_engine
+
+      - name: Descargar datos existentes desde Drive
+        run: |
+          echo "📥 Descargando estructura actual desde Drive..."
+          rclone copy gdrive:p2p_datasets/ ./ml_engine/ --verbose
+        continue-on-error: true   # si es primera vez, no falla
+
       - name: Ejecutar Scraper
         run: python recolector_p2p.py
+        env:
+          DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      - name: Subir archivos a Drive (estructura por meses)
+      - name: Ejecutar Manager (DataConsolidator)
+        run: python manager.py
+        env:
+          DATA_ROOT: ${{ github.workspace }}/ml_engine
+
+      - name: Ejecutar Micro
+        run: python micro.py
+        env:
+          DATA_ROOT: ${{ github.workspace }}/ml_engine
+
+      - name: Ejecutar Macro
+        run: python macro.py
+        env:
+          DATA_ROOT: ${{ github.workspace }}/ml_engine
+
+      - name: Ejecutar Brain (Orquestador)
+        run: python brain.py
+        env:
+          DATA_ROOT: ${{ github.workspace }}/ml_engine
+
+      - name: Subir todo a Drive
         run: |
-          DRIVE_BASE="gdrive:p2p_datasets/raw"
-          # Buscar archivos en la carpeta raw (ajusta si tu scraper usa otra ruta)
-          for file in $(find raw -name "p2p_*.parquet" 2>/dev/null); do
-            rel_path="${file#raw/}"
-            rclone mkdir "${DRIVE_BASE}/$(dirname "$rel_path")"
-            rclone copy "$file" "${DRIVE_BASE}/$(dirname "$rel_path")/"
-            echo "✅ Subido: $rel_path"
-          done
-          # Registro de ejecución
-          echo "Última ejecución: $(date)" > ultimo_run.txt
-          rclone copy ultimo_run.txt gdrive:p2p_datasets/
+          echo "📤 Sincronizando cambios con Drive..."
+          rclone sync ./ml_engine/ gdrive:p2p_datasets/ --verbose
