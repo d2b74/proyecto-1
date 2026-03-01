@@ -60,6 +60,22 @@ jobs:
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
+          
+      - name: Verificar configuración de rclone
+        run: |
+          echo "Remotes configurados:"
+          rclone listremotes
+          echo "Probando acceso a gdrive:"
+          rclone about gdrive: || echo "❌ No se pudo acceder a gdrive"
+      
+      - name: Listar archivos locales antes de subir
+        run: |
+          echo "Contenido de ml_engine/raw:"
+          find ml_engine/raw -type f -name "*.parquet" | head -20
+          echo "Total archivos Parquet en raw: $(find ml_engine/raw -name "*.parquet" | wc -l)"
+          echo "Contenido de ml_engine/USDT:"
+          ls -la ml_engine/USDT/ || echo "Carpeta USDT vacía o no existe"
+          
       - name: Subir todo a Drive
         run: |
           echo "📤 Sincronizando cambios con Drive..."
