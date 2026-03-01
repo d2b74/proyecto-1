@@ -16,15 +16,20 @@ class DataConsolidator:
         os.makedirs(self.base_path, exist_ok=True)
 
     def _get_last_master_timestamp(self):
+        """Obtiene el timestamp más reciente del master, convertido a datetime."""
         if not os.path.exists(self.master_file):
             return None
         try:
             df = pd.read_parquet(self.master_file, columns=['timestamp'])
+            if df['timestamp'].dtype == 'object':
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
             return df['timestamp'].max()
-        except:
+        except Exception as e:
+            print(f"⚠️ Error leyendo master timestamp: {e}")
             return None
 
     def _get_new_files_by_timestamp(self):
+        """Identifica archivos raw con datos posteriores al último master."""
         last_ts = self._get_last_master_timestamp()
         pattern = os.path.join(self.raw_path, '**', 'p2p_*.parquet')
         all_files = sorted(glob.glob(pattern, recursive=True))
@@ -32,6 +37,8 @@ class DataConsolidator:
         for f in all_files:
             try:
                 df_ts = pd.read_parquet(f, columns=['timestamp'])
+                if df_ts['timestamp'].dtype == 'object':
+                    df_ts['timestamp'] = pd.to_datetime(df_ts['timestamp'])
                 file_max_ts = df_ts['timestamp'].max()
                 if last_ts is None or file_max_ts > last_ts:
                     new_files.append(f)
@@ -58,6 +65,10 @@ class DataConsolidator:
                 print(f"⚠️ Error leyendo {f}: {e}")
                 continue
 
+            # Asegurar timestamp como datetime
+            if df_temp['timestamp'].dtype == 'object':
+                df_temp['timestamp'] = pd.to_datetime(df_temp['timestamp'])
+
             if 'moneda' in df_temp.columns:
                 df_temp = df_temp[df_temp['moneda'] == self.asset].copy()
             else:
@@ -67,9 +78,7 @@ class DataConsolidator:
             if df_temp.empty:
                 continue
 
-            if df_temp['timestamp'].dtype == 'object':
-                df_temp['timestamp'] = pd.to_datetime(df_temp['timestamp'])
-
+            # Filtro de calidad
             if 'month_finish_rate' in df_temp.columns:
                 min_rate = self.cfg.get('min_rate_confianza', 0.95)
                 df_temp = df_temp[df_temp['month_finish_rate'] >= min_rate].copy()
@@ -79,6 +88,7 @@ class DataConsolidator:
             if df_temp.empty:
                 continue
 
+            # Enriquecimiento
             if 'mep_venta' in df_temp.columns:
                 df_temp['ratio_p2p_mep'] = df_temp['precio'] / df_temp['mep_venta']
 
@@ -103,6 +113,7 @@ class DataConsolidator:
 
         df_final.to_parquet(self.master_file, compression='snappy', index=False)
 
+        # Actualizar archivo de control (opcional)
         if files_to_process:
             with open(self.control_file, 'w') as f:
                 f.write(files_to_process[-1])
