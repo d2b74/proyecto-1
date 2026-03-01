@@ -6,11 +6,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 class Collector:
-    """
-    Recolecta datos P2P de Binance (USDT/USDC) junto con MEP, Blue y BTC.
-    Guarda cada ciclo en un archivo Parquet individual en:
-        DATA_ROOT/raw/YYYY-MM/p2p_YYYYMMDD_HHMM.parquet
-    """
+
     def __init__(self, data_root=None):
         self.config = {
             "monedas": ["USDT", "USDC"],
@@ -19,8 +15,13 @@ class Collector:
         }
         self.cache_mep = (0.0, 0.0)
         self.cache_blue = (0.0, 0.0)
-        self.data_root = data_root or '/content/drive/MyDrive/data_pool'
-        self.raw_base = os.path.join(self.data_root, 'raw')
+
+        # Determinar carpeta base para raw
+        if data_root is None:
+            # Por defecto, carpeta 'raw' en el directorio actual
+            self.raw_base = os.path.join(os.getcwd(), 'raw')
+        else:
+            self.raw_base = os.path.join(data_root, 'raw')
         os.makedirs(self.raw_base, exist_ok=True)
         
         self.session = requests.Session()
@@ -154,17 +155,15 @@ class Collector:
 
         if todos_datos:
             df = pd.DataFrame(todos_datos)
-            # Obtener año-mes del primer registro (todos tienen el mismo mes)
+            # Obtener año-mes del primer registro
             mes = df['mes_archivo'].iloc[0]
-            # Crear subcarpeta por mes
             mes_path = os.path.join(self.raw_base, mes)
             os.makedirs(mes_path, exist_ok=True)
-            # Nombre de archivo con timestamp completo
             timestamp_str = self.obtener_hora_argentina().strftime("%Y%m%d_%H%M")
             filename = f"p2p_{timestamp_str}.parquet"
             filepath = os.path.join(mes_path, filename)
             df.to_parquet(filepath, engine='pyarrow', compression='snappy', index=False)
-            # Opcional: guardar el último archivo generado en la raíz raw (para referencia)
+            # Archivo de control opcional (último archivo)
             with open(os.path.join(self.raw_base, "ultimo.txt"), "w") as f:
                 f.write(f"{mes}/{filename}")
             print(f"✅ {mes}/{filename} guardado ({len(df)} filas)")
@@ -172,5 +171,5 @@ class Collector:
             print("⚠️ Sin datos.")
 
 if __name__ == "__main__":
-    collector = Collector()
+    collector = Collector()  # En GitHub Actions usará ./raw
     collector.ejecutar_ciclo()
