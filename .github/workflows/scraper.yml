@@ -18,42 +18,27 @@ jobs:
           python-version: '3.10'
 
       - name: Instalar dependencias
-        run: pip install requests
+        run: pip install -r requirements.txt
 
       - name: Configurar Rclone (Modo Base64)
         run: |
           sudo apt-get install rclone
           mkdir -p ~/.config/rclone
-          # Aquí decodificamos el secreto para que rclone lea el archivo original sin errores
           echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > ~/.config/rclone/rclone.conf
 
       - name: Ejecutar Scraper
         run: python recolector_p2p.py
 
-      - name: Actualizar Drive (Append Directo)
+      - name: Subir archivos a Drive (estructura por meses)
         run: |
-          # 1. Definir nombres únicos para esta corrida
-          TEMP_HISTORIAL="historial_${{ github.run_id }}.csv"
-          
-          # 2. Identificar el archivo nuevo generado hoy
-          LOCAL_FILE=$(ls p2p_raw_dataset_*.csv | head -n 1)
-          echo "Archivo local detectado: $LOCAL_FILE"
-
-          # 3. Verificar si existe el archivo en Drive
-          if rclone ls gdrive:p2p_datasets/$LOCAL_FILE; then
-            echo "El historial existe en Drive. Bajándolo como $TEMP_HISTORIAL..."
-            
-            # Descargamos el archivo del Drive con el nuevo nombre único
-            rclone copyto gdrive:p2p_datasets/$LOCAL_FILE ./$TEMP_HISTORIAL
-            
-            # Unimos los datos nuevos (saltando el encabezado) al historial
-            tail -n +2 $LOCAL_FILE >> $TEMP_HISTORIAL
-            
-            # Subimos el archivo final volviendo al nombre original
-            rclone copyto ./$TEMP_HISTORIAL gdrive:p2p_datasets/$LOCAL_FILE
-          else
-            echo "No hay historial. Subiendo por primera vez."
-            rclone copy $LOCAL_FILE gdrive:p2p_datasets/
-          fi
-          
-          echo "🚀 Proceso terminado con éxito."
+          DRIVE_BASE="gdrive:p2p_datasets/raw"
+          # Buscar archivos en la carpeta raw (ajusta si tu scraper usa otra ruta)
+          for file in $(find raw -name "p2p_*.parquet" 2>/dev/null); do
+            rel_path="${file#raw/}"
+            rclone mkdir "${DRIVE_BASE}/$(dirname "$rel_path")"
+            rclone copy "$file" "${DRIVE_BASE}/$(dirname "$rel_path")/"
+            echo "✅ Subido: $rel_path"
+          done
+          # Registro de ejecución
+          echo "Última ejecución: $(date)" > ultimo_run.txt
+          rclone copy ultimo_run.txt gdrive:p2p_datasets/
