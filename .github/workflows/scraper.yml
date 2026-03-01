@@ -40,12 +40,6 @@ jobs:
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      # PASO NUEVO: Subir raw inmediatamente después del scraper
-      - name: Subir raw a Drive
-        run: |
-          echo "📤 Subiendo archivos raw a Drive..."
-          rclone sync ./ml_engine/raw/ gdrive:p2p_datasets/raw/ --verbose
-
       - name: Ejecutar Manager (consolidación)
         run: python manager.py
         env:
@@ -56,7 +50,7 @@ jobs:
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      - name: Subir resultados a Drive (todo lo demás)
+      - name: Subir todo a Drive
         run: |
-          echo "📤 Sincronizando cambios con Drive (excepto raw)..."
-          rclone sync ./ml_engine/ gdrive:p2p_datasets/ --verbose --exclude "raw/**"
+          echo "📤 Sincronizando cambios con Drive..."
+          rclone sync ./ml_engine/ gdrive:p2p_datasets/ --verbose
