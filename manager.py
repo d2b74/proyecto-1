@@ -2,7 +2,6 @@ import pandas as pd
 import glob
 import os
 from datetime import datetime
-from config import CONFIG
 
 class DataConsolidator:
     def __init__(self, cfg):
@@ -16,28 +15,37 @@ class DataConsolidator:
 
         os.makedirs(self.base_path, exist_ok=True)
 
-    def _get_last_processed(self):
-        if not os.path.exists(self.control_file):
+    def _get_last_master_timestamp(self):
+        """Obtiene el timestamp máximo del master actual."""
+        if not os.path.exists(self.master_file):
             return None
-        with open(self.control_file, 'r') as f:
-            return f.read().strip()
+        try:
+            df = pd.read_parquet(self.master_file, columns=['timestamp'])
+            return df['timestamp'].max()
+        except:
+            return None
 
-    def _update_last_processed(self, filepath):
-        rel_path = os.path.relpath(filepath, self.raw_path)
-        with open(self.control_file, 'w') as f:
-            f.write(rel_path)
-
-    def _get_new_files(self):
-        # Búsqueda recursiva en todas las subcarpetas de raw
+    def _get_new_files_by_timestamp(self):
+        """
+        Busca archivos raw que contengan datos con timestamp posterior
+        al último del master.
+        """
+        last_ts = self._get_last_master_timestamp()
         pattern = os.path.join(self.raw_path, '**', 'p2p_*.parquet')
         all_files = sorted(glob.glob(pattern, recursive=True))
-        print(f"📁 Archivos raw encontrados: {len(all_files)}")
-        last = self._get_last_processed()
-        if last is None:
-            return all_files
-        last_abs = os.path.join(self.raw_path, last)
-        new_files = [f for f in all_files if f > last_abs]
-        print(f"🆕 Archivos nuevos: {len(new_files)}")
+        new_files = []
+
+        for f in all_files:
+            try:
+                # Leer solo la columna timestamp para ser eficiente
+                df_ts = pd.read_parquet(f, columns=['timestamp'])
+                file_max_ts = df_ts['timestamp'].max()
+                if last_ts is None or file_max_ts > last_ts:
+                    new_files.append(f)
+            except Exception as e:
+                print(f"⚠️ Error leyendo timestamp de {f}: {e}")
+                continue
+
         return new_files
 
     def run_update(self, force_all=False):
@@ -47,7 +55,9 @@ class DataConsolidator:
             pattern = os.path.join(self.raw_path, '**', 'p2p_*.parquet')
             files_to_process = sorted(glob.glob(pattern, recursive=True))
         else:
-            files_to_process = self._get_new_files()
+            files_to_process = self._get_new_files_by_timestamp()
+
+        print(f"📁 Archivos raw encontrados: {len(files_to_process)}")
 
         if not files_to_process:
             print("✅ No hay archivos nuevos.")
@@ -107,12 +117,17 @@ class DataConsolidator:
 
         df_final.to_parquet(self.master_file, compression='snappy', index=False)
 
+        # Opcional: actualizar el archivo de control con el último archivo procesado
         if files_to_process:
-            self._update_last_processed(files_to_process[-1])
+            with open(self.control_file, 'w') as f:
+                f.write(files_to_process[-1])
 
         print(f"✅ Consolidación completada. Master en: {self.master_file}")
-        
+
+
 if __name__ == "__main__":
+    import sys
     from config import CONFIG
+    force = '--force-all' in sys.argv
     consolidator = DataConsolidator(CONFIG)
-    consolidator.run_update()
+    consolidator.run_update(force_all=force)
