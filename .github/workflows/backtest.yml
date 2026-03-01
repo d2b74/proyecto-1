@@ -1,0 +1,41 @@
+name: Backtest y Optimización Diaria
+
+on:
+  schedule:
+    - cron: '0 3 * * *'   # 3:00 AM UTC (00:00 ART)
+  workflow_dispatch:
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Configurar Rclone
+        run: |
+          sudo apt-get install rclone
+          mkdir -p ~/.config/rclone
+          echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > ~/.config/rclone/rclone.conf
+
+      - name: Descargar datos históricos
+        run: |
+          mkdir -p ml_engine
+          rclone copy gdrive:p2p_datasets/ ./ml_engine/ --verbose
+
+      - name: Ejecutar Backtest
+        run: python tester.py   # tu script de backtest
+        env:
+          DATA_ROOT: ${{ github.workspace }}/ml_engine
+
+      - name: Subir best.json a Drive
+        run: |
+          rclone copy ./ml_engine/USDT/best.json gdrive:p2p_datasets/USDT/
