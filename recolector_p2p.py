@@ -171,5 +171,7 @@ class Collector:
             print("⚠️ Sin datos.")
 
 if __name__ == "__main__":
-    collector = Collector()  # En GitHub Actions usará ./raw
+    import os
+    data_root = os.getenv('DATA_ROOT')  # toma la variable de entorno, si no existe queda None
+    collector = Collector(data_root=data_root)
     collector.ejecutar_ciclo()
