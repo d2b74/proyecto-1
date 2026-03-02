@@ -4,12 +4,10 @@ import json
 import os
 from datetime import datetime, timedelta
 from itertools import product
-from config import CONFIG  # importa la configuración global
+from config import CONFIG  
 
 class BacktestEngine:
-    """
-    Motor de backtesting para el sistema P2P.
-    """
+
     def __init__(self, df, cfg):
         self.cfg = cfg
         self.data_root = CONFIG['DATA_ROOT']
@@ -125,9 +123,9 @@ class BacktestEngine:
         df = self.resultados.copy()
         if bins is not None and pd.api.types.is_numeric_dtype(df[columna]):
             df['cluster'] = pd.cut(df[columna], bins=bins)
-            grupo = df.groupby('cluster')
+            grupo = df.groupby('cluster', observed=False)  # observed=False evita el warning
         else:
-            grupo = df.groupby(columna)
+            grupo = df.groupby(columna, observed=False)
         stats = []
         for nombre, g in grupo:
             win_rate = g['exito'].mean() * 100
@@ -156,7 +154,7 @@ class BacktestEngine:
         bins = bins or self.cfg.get('bins_duracion', [0, 4, 12, 24, float('inf')])
         labels = labels or self.cfg.get('labels_duracion', ['0-4h', '4-12h', '12-24h', '24h+'])
         df['rango_duracion'] = pd.cut(df['duracion_horas'], bins=bins, labels=labels, right=False)
-        res = df.groupby('rango_duracion').agg(
+        res = df.groupby('rango_duracion', observed=False).agg(
             operaciones=('exito', 'count'),
             win_rate=('exito', lambda x: round(x.mean()*100, 1)),
             ganancia_total=('ganancia_usd', 'sum'),
@@ -164,6 +162,42 @@ class BacktestEngine:
             duracion_prom=('duracion_horas', 'mean')
         ).reset_index()
         return res
+
+    def comparar_con_factor_riesgo(self, col_factor='factor_total', tipo=None):
+        """
+        Compara el desempeño de las operaciones según el valor del factor de riesgo.
+        Útil para validar si el factor realmente mejora los resultados.
+        """
+        if self.resultados is None:
+            return None
+
+        # Necesitamos unir los resultados con el factor de riesgo original de cada fila
+        # Como el factor está en el df original, lo agregamos a resultados
+        df_res = self.resultados.copy()
+        if tipo:
+            df_res = df_res[df_res['tipo'] == tipo].copy()
+            if len(df_res) == 0:
+                return None
+
+        df_original = self.df.set_index('timestamp')[col_factor].to_dict()
+        df_res['factor'] = df_res['timestamp'].map(df_original)
+
+        if df_res['factor'].isna().all():
+            print("No se encontró la columna de factor en los datos.")
+            return None
+
+        mediana = df_res['factor'].median()
+        alto = df_res[df_res['factor'] >= mediana]
+        bajo = df_res[df_res['factor'] < mediana]
+
+        comparacion = pd.DataFrame({
+            'grupo': ['Factor >= mediana', 'Factor < mediana'],
+            'operaciones': [len(alto), len(bajo)],
+            'win_rate': [alto['exito'].mean()*100, bajo['exito'].mean()*100],
+            'ganancia_total': [alto['ganancia_usd'].sum(), bajo['ganancia_usd'].sum()],
+            'drawdown_prom': [alto['drawdown_max'].mean(), bajo['drawdown_max'].mean()]
+        })
+        return comparacion
 
     def optimizar_umbrales(self, rango_itc, rango_spread, tipo='scalper', metric='win_rate'):
         resultados = []
@@ -223,25 +257,19 @@ class BacktestEngine:
             json.dump(config, f, indent=4)
         print(f"✅ Configuración para {tipo} guardada en {path}")
 
-   
     def generar_reporte(self):
-        """Genera un reporte completo con estadísticas por ventana, clusters y duración."""
-        if self.resultados is None or len(self.resultados) == 0:
-            print("📭 No hay resultados para generar reporte. El backtest no encontró operaciones.")
+        if self.resultados is None:
+            print("Primero ejecuta el backtest.")
             return
-
         print("\n" + "="*70)
         print(" 🦅 REPORTE MAESTRO DE BACKTESTING")
         print("="*70)
-
-        # Por ventana
         for tipo in ['scalper', 'swing', 'estrategica']:
             mask = self.resultados['tipo'] == tipo
             df_tipo = self.resultados[mask]
             if len(df_tipo) == 0:
                 print(f"\n--- {tipo.upper()} --- Sin operaciones.")
                 continue
-
             win_rate = df_tipo['exito'].mean() * 100
             ganancia = df_tipo['ganancia_usd'].sum()
             drawdown = df_tipo['drawdown_max'].mean()
@@ -249,7 +277,6 @@ class BacktestEngine:
             target_rate = df_tipo['target_alcanzado'].mean() * 100
             stop_rate = df_tipo['stop_alcanzado'].mean() * 100
             timeout_rate = (df_tipo['resultado'] == 'timeout').mean() * 100
-
             print(f"\n--- {tipo.upper()} ---")
             print(f"Operaciones: {len(df_tipo)}")
             print(f"Win Rate: {win_rate:.1f}%")
@@ -257,14 +284,12 @@ class BacktestEngine:
             print(f"Drawdown máximo promedio: {drawdown:.2f}%")
             print(f"Duración promedio: {tiempo:.1f} horas")
             print(f"Alcanzaron target: {target_rate:.1f}% | Stop: {stop_rate:.1f}% | Timeout: {timeout_rate:.1f}%")
-
-            # Análisis de duración para esta ventana
             print("\n  Análisis por Duración:")
             df_duracion = self.analizar_por_duracion(tipo=tipo)
             if df_duracion is not None and len(df_duracion) > 0:
                 print(df_duracion.to_string(index=False))
 
-        # Análisis por clusters definidos en cfg
+        # Análisis por clusters
         if 'cluster_vars' in self.cfg:
             for var in self.cfg['cluster_vars']:
                 if var in self.resultados.columns:
@@ -276,7 +301,7 @@ class BacktestEngine:
                         df_cluster = self.analizar_por_cluster(var)
                     print(df_cluster.to_string(index=False))
 
-        # Comparación por factor de riesgo (si existe)
+        # Comparación por factor de riesgo
         if 'factor_total' in self.df.columns:
             print("\n--- Comparación por Factor de Riesgo ---")
             for tipo in ['scalper', 'swing', 'estrategica']:
@@ -287,11 +312,9 @@ class BacktestEngine:
 
         print("\n" + "="*70)
 
-
 if __name__ == "__main__":
-    #from config import CONFIG
+    from config import CONFIG
 
-    # Ruta al archivo de señales
     signals_path = os.path.join(CONFIG['DATA_ROOT'], CONFIG['asset'], 'signals.csv')
     if not os.path.exists(signals_path):
         print(f"❌ No se encuentra {signals_path}")
@@ -299,7 +322,6 @@ if __name__ == "__main__":
 
     df = pd.read_csv(signals_path, parse_dates=['timestamp'])
 
-    # Configuración específica del backtest
     cfg_bt = {
         'slippage_pct': 0.05,
         'targets': {'scalper': 0.2, 'swing': 0.4, 'estrategica': 0.8},
@@ -328,7 +350,7 @@ if __name__ == "__main__":
         print("\nMejor combinación para SCALPER:", mejor_scalper)
         engine.exportar_configuracion_optima(mejor_scalper, 'scalper', CONFIG['DATA_ROOT'])
 
-    # Optimizar para swing (opcional)
+    # Optimizar para swing
     df_opt_swing, mejor_swing = engine.optimizar_umbrales(rango_itc, rango_spread, tipo='swing', metric='win_rate')
     if mejor_swing:
         print("Mejor combinación para SWING:", mejor_swing)
