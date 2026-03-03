@@ -4,6 +4,7 @@ import numpy as np
 import calendar
 import json
 from datetime import datetime
+import pytz  
 from micro import MicroEngine
 from macro import MacroAnalizadorSystem
 from config import CONFIG
@@ -19,6 +20,7 @@ class OrquestadorSystemBrain:
         self.path_decision_log = os.path.join(self.base_path, 'log.csv')
         self.path_estado = os.path.join(self.data_root, 'status.json') 
         self.path_config_optima = os.path.join(self.base_path, 'best.json')
+        self.tz = pytz.timezone('America/Argentina/Buenos_Aires')  # <-- zona horaria
 
         # Umbrales con valores por defecto
         defaults = {
@@ -50,15 +52,14 @@ class OrquestadorSystemBrain:
         self.cargar_configuracion_optima()
 
     def cargar_configuracion_optima(self):
+        # (sin cambios, igual que antes)
         self.optimizacion_aplicada = False
         if not os.path.exists(self.path_config_optima):
             print("📄 No se encontró best.json. Usando valores por defecto.")
             return
-
         try:
             with open(self.path_config_optima, 'r') as f:
                 config = json.load(f)
-
             ahora = datetime.now()
             for tipo in ['scalper', 'swing', 'estrategica']:
                 if tipo in config:
@@ -68,7 +69,6 @@ class OrquestadorSystemBrain:
                         dias = (ahora - fecha).days
                         if dias > config[tipo].get('dias_validez', 2):
                             print(f"⚠️  Configuración para {tipo} tiene {dias} días (excede validez).")
-
             if 'scalper' in config:
                 self.umbrales['itc_threshold_scalper'] = config['scalper'].get('itc_threshold', 65)
                 self.umbrales['spread_min_scalper'] = config['scalper'].get('spread_min', 0.15)
@@ -78,15 +78,14 @@ class OrquestadorSystemBrain:
             if 'estrategica' in config:
                 self.umbrales['itc_threshold_estrategica'] = config['estrategica'].get('itc_threshold', 30)
                 self.umbrales['spread_min_estrategica'] = config['estrategica'].get('spread_min', 0.05)
-
             self.optimizacion_aplicada = True
             print("✅ Configuración óptima cargada desde best.json.")
-
         except Exception as e:
             print(f"❌ Error al cargar best.json: {e}. Usando valores por defecto.")
             self.optimizacion_aplicada = False
 
     def verificar_estado(self):
+        # (sin cambios)
         if not os.path.exists(self.path_estado):
             return True
         try:
@@ -97,6 +96,7 @@ class OrquestadorSystemBrain:
             return True
 
     def log_decision(self, micro, macro, tipo, monto, razon, spread_teorico, cumplio_condiciones=True):
+        # (sin cambios)
         registro = {
             'timestamp': micro['timestamp'],
             'tipo': tipo,
@@ -117,7 +117,6 @@ class OrquestadorSystemBrain:
                 'btc_vol': macro.get('btc_vol_15m', None),
                 'es_horario_bancario': macro.get('es_horario_bancario', None),
             })
-
         df_new = pd.DataFrame([registro])
         header = not os.path.exists(self.path_decision_log)
         try:
@@ -125,7 +124,31 @@ class OrquestadorSystemBrain:
         except Exception as e:
             print(f"❌ Error escribiendo en log.csv: {e}")
 
+    def _obtener_contexto_reciente(self):
+        """Lee el archivo de contexto y devuelve el registro más cercano al momento actual."""
+        contexto_path = os.path.join(self.data_root, 'contexto', 'contexto.csv')
+        if not os.path.exists(contexto_path):
+            print("⚠️ No hay archivo de contexto.")
+            return {}
+        try:
+            df = pd.read_csv(contexto_path, parse_dates=['timestamp'])
+            if df.empty:
+                return {}
+            # Tomar el último registro (asumiendo que está ordenado)
+            ultimo = df.iloc[-1].to_dict()
+            # Verificar antigüedad (no más de 2 horas)
+            ahora = datetime.now(self.tz)
+            diff = ahora - ultimo['timestamp']
+            if diff.total_seconds() > 7200:  # 2 horas
+                print(f"⚠️ Contexto demasiado antiguo ({diff.total_seconds()/3600:.1f}h). No se usará.")
+                return {}
+            return ultimo
+        except Exception as e:
+            print(f"⚠️ Error leyendo contexto: {e}")
+            return {}
+
     def calcular_capas_de_inteligencia(self, micro, macro):
+        # (sin cambios)
         if not macro:
             macro = {}
         brecha_mep = abs(macro.get('brecha_mep', 0))
@@ -174,6 +197,7 @@ class OrquestadorSystemBrain:
         return 1.0
 
     def calcular_tamanos_ventanas(self, micro, macro, capital_base, confianza, itc):
+        # (sin cambios)
         umbrales = self.umbrales
         p_c = micro.get('p_c', 1)
         p_v = micro.get('p_v', 1)
@@ -245,6 +269,9 @@ class OrquestadorSystemBrain:
         self.cargar_configuracion_optima()
         print(f"🧠 [MODO DIOS] FUSIÓN TOTAL | {self.asset}")
 
+        # Leer contexto exterior
+        contexto = self._obtener_contexto_reciente()
+
         micro = MicroEngine(self.cfg).run()
         if not micro:
             print("❌ No se pudo obtener análisis micro. Abortando.")
@@ -266,8 +293,13 @@ class OrquestadorSystemBrain:
             'dias_fin_mes': dfm,
             'semana_mes': semana,
             'macro_disponible': 1 if macro else 0,
-            **tamanos
+            **tamanos,
         }
+
+        # Agregar contexto con prefijo
+        for k, v in contexto.items():
+            if k != 'timestamp':  # no duplicar timestamp
+                registro[f'ctx_{k}'] = v
 
         self._guardar_completo(registro)
         self._reporte_maestro(micro, macro, itc, confianza, liq_brecha, tamanos)
@@ -275,11 +307,24 @@ class OrquestadorSystemBrain:
 
     def _guardar_completo(self, registro):
         df_new = pd.DataFrame([registro])
-        header = not os.path.exists(self.path_completo)
-        df_new.to_csv(self.path_completo, mode='a', header=header, index=False)
+        if os.path.exists(self.path_completo):
+            # Leer existente
+            df_existing = pd.read_csv(self.path_completo, parse_dates=['timestamp'])
+            # Unión de columnas
+            todas_columnas = set(df_existing.columns) | set(df_new.columns)
+            # Reindexar
+            df_existing = df_existing.reindex(columns=todas_columnas)
+            df_new = df_new.reindex(columns=todas_columnas)
+            # Concatenar
+            df_final = pd.concat([df_existing, df_new], ignore_index=True)
+        else:
+            df_final = df_new
+        # Guardar (sobrescribe)
+        df_final.to_csv(self.path_completo, index=False)
         print(f"📂 Registro guardado en: {self.path_completo}")
 
     def _reporte_maestro(self, micro, macro, itc, confianza, liq_brecha, tamanos):
+        # (sin cambios)
         print("\n" + "█" * 70)
         print(f"🦅 THEORACLE BRAIN | {self.asset} | ITC: {itc} | CONF: {confianza}%")
         if itc < self.umbrales['itc_oportunidad']:
