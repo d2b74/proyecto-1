@@ -134,12 +134,14 @@ class OrquestadorSystemBrain:
             df = pd.read_csv(contexto_path, parse_dates=['timestamp'])
             if df.empty:
                 return {}
-            # Tomar el último registro (asumiendo que está ordenado)
             ultimo = df.iloc[-1].to_dict()
-            # Verificar antigüedad (no más de 2 horas)
+            # Asegurar que el timestamp tenga zona horaria (Argentina)
+            ts = ultimo['timestamp']
+            if ts.tzinfo is None:
+                ts = self.tz.localize(ts)
             ahora = datetime.now(self.tz)
-            diff = ahora - ultimo['timestamp']
-            if diff.total_seconds() > 7200:  # 2 horas
+            diff = ahora - ts
+            if diff.total_seconds() > 7200:  # 2 horas de tolerancia
                 print(f"⚠️ Contexto demasiado antiguo ({diff.total_seconds()/3600:.1f}h). No se usará.")
                 return {}
             return ultimo
