@@ -307,19 +307,53 @@ class OrquestadorSystemBrain:
 
     def _guardar_completo(self, registro):
         df_new = pd.DataFrame([registro])
+        
+        # Lista base en orden fijo (la misma que usaste para reparar)
+        columnas_base = ['timestamp', 'asset', 'p_c', 'vwap_c', 'muro_c', 'full_c', 'nick_c',
+                         'p_v', 'vwap_v', 'muro_v', 'full_v', 'nick_v', 'fuerza', 'trend_15m',
+                         'cap_usd_real', 'ajustado', 'p_actual', 'min_24h', 'max_24h', 'var_24h',
+                         'volatilidad', 'posicion_rel', 'mep_avg', 'mep_gap_avg_24h', 'blue_avg',
+                         'brecha_mep', 'brecha_blue', 'corr_btc', 'vol_proxy', 'n_muestras',
+                         'brecha_velocity', 'distancia_media_brecha', 'btc_vol_15m', 'btc_vol_1h',
+                         'hora', 'dia_semana', 'es_finde', 'es_feriado', 'es_horario_bancario',
+                         'itc_score', 'confianza_ejec', 'liq_brecha_ratio', 'tension_spread',
+                         'dias_fin_mes', 'semana_mes', 'macro_disponible', 'scalper_usd',
+                         'swing_usd', 'estrategica_usd', 'target_scalper_usd', 'target_swing_usd',
+                         'target_estrategica_usd', 'spread_actual', 'factor_itc', 'factor_btc',
+                         'factor_total']
+        
         if os.path.exists(self.path_completo):
             # Leer existente
             df_existing = pd.read_csv(self.path_completo, parse_dates=['timestamp'])
-            # Unión de columnas
-            todas_columnas = set(df_existing.columns) | set(df_new.columns)
-            # Reindexar
-            df_existing = df_existing.reindex(columns=todas_columnas)
+            
+            # Detectar columnas de contexto ya existentes
+            cols_existing = set(df_existing.columns)
+            cols_nuevas = set(registro.keys()) - cols_existing
+            
+            # Agregar columnas nuevas al DataFrame existente (con NaN)
+            for col in cols_nuevas:
+                df_existing[col] = pd.NA
+            
+            # Asegurar que df_new tenga todas las columnas (las existentes + las nuevas)
+            todas_columnas = cols_existing | cols_nuevas
             df_new = df_new.reindex(columns=todas_columnas)
+            
+            # Ordenar: primero columnas_base (las que existen), luego contexto alfabético
+            columnas_contexto = sorted([c for c in todas_columnas if c.startswith('ctx_')])
+            columnas_finales = [c for c in columnas_base if c in todas_columnas] + columnas_contexto
+            
+            # Reindexar ambos DataFrames
+            df_existing = df_existing[columnas_finales]
+            df_new = df_new[columnas_finales]
+            
             # Concatenar
             df_final = pd.concat([df_existing, df_new], ignore_index=True)
         else:
-            df_final = df_new
-        # Guardar (sobrescribe)
+            # Primera vez: solo ordenar columnas_base y contexto
+            columnas_contexto = sorted([c for c in registro.keys() if c.startswith('ctx_')])
+            columnas_finales = columnas_base + columnas_contexto
+            df_final = df_new[columnas_finales]
+        
         df_final.to_csv(self.path_completo, index=False)
         print(f"📂 Registro guardado en: {self.path_completo}")
 
