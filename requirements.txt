@@ -3,3 +3,5 @@ requests
 pyarrow
 holidays
 numpy
+yfinance
+pytz
