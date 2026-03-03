@@ -53,4 +53,4 @@ jobs:
       - name: Subir todo a Drive
         run: |
           echo "📤 Sincronizando cambios con Drive..."
-          rclone sync ./ml_engine/ gdrive:p2p_datasets/ --verbose
+          rclone copy ./ml_engine/ gdrive:p2p_datasets/ --verbose
