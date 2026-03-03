@@ -29,10 +29,18 @@ jobs:
       - name: Crear carpeta de datos local
         run: mkdir -p ml_engine
 
-      - name: Descargar datos existentes desde Drive
+      # --- Caché para ml_engine ---
+      - name: Restaurar/Cachear ml_engine
+        uses: actions/cache@v3
+        with:
+          path: ml_engine
+          key: ml-engine-${{ runner.os }}
+          save-always: true
+
+      - name: Descargar datos nuevos desde Drive
         run: |
-          echo "📥 Descargando estructura actual desde Drive..."
-          rclone copy gdrive:p2p_datasets/ ./ml_engine/ --verbose
+          echo "📥 Descargando solo archivos nuevos/modificados..."
+          rclone copy gdrive:p2p_datasets/ ./ml_engine/ --verbose --update
         continue-on-error: true
 
       - name: Ejecutar Scraper
