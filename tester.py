@@ -117,13 +117,17 @@ class BacktestEngine:
         print(f"Backtest completado. {len(self.resultados)} operaciones simuladas.")
         return self.resultados
 
-    def analizar_por_cluster(self, columna, bins=None):
-        if self.resultados is None:
-            raise ValueError("Ejecuta el backtest primero.")
-        df = self.resultados.copy()
+    def analizar_por_cluster(self, columna, bins=None, df=None):
+        if df is None:
+            if self.resultados is None:
+                raise ValueError("Ejecuta el backtest primero.")
+            df = self.resultados.copy()
+        else:
+            df = df.copy()
+    
         if bins is not None and pd.api.types.is_numeric_dtype(df[columna]):
             df['cluster'] = pd.cut(df[columna], bins=bins)
-            grupo = df.groupby('cluster', observed=False)  # observed=False evita el warning
+            grupo = df.groupby('cluster', observed=False)
         else:
             grupo = df.groupby(columna, observed=False)
         stats = []
@@ -294,12 +298,26 @@ class BacktestEngine:
             for var in self.cfg['cluster_vars']:
                 if var in self.resultados.columns:
                     print(f"\n--- Análisis por {var} ---")
-                    if pd.api.types.is_numeric_dtype(self.resultados[var]):
-                        bins = self.cfg.get('bins', 4)
-                        df_cluster = self.analizar_por_cluster(var, bins=bins)
+                    # Filtrar filas con NaN si la variable es de contexto
+                    if var.startswith('ctx_'):
+                        df_filtrado = self.resultados.dropna(subset=[var]).copy()
+                        if df_filtrado.empty:
+                            print("   (sin datos con contexto)")
+                            continue
                     else:
-                        df_cluster = self.analizar_por_cluster(var)
-                    print(df_cluster.to_string(index=False))
+                        df_filtrado = self.resultados
+        
+                    if pd.api.types.is_numeric_dtype(df_filtrado[var]):
+                        bins = self.cfg.get('bins', 4)
+                        # Asegurar que haya al menos 2 puntos para crear bins
+                        if len(df_filtrado) < 2:
+                            print("   (insuficientes datos para agrupar)")
+                            continue
+                        df_cluster = self.analizar_por_cluster(var, bins=bins, df=df_filtrado)
+                    else:
+                        df_cluster = self.analizar_por_cluster(var, df=df_filtrado)
+                    if df_cluster is not None and not df_cluster.empty:
+                        print(df_cluster.to_string(index=False))
 
         # Comparación por factor de riesgo
         if 'factor_total' in self.df.columns:
