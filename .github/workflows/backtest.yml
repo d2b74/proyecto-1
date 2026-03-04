@@ -36,6 +36,7 @@ jobs:
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      - name: Subir best.json a Drive
+      - name: Subir resultados a Drive
         run: |
-          rclone copy ./ml_engine/USDT/best.json gdrive:p2p_datasets/USDT/
+          echo "📤 Subiendo resultados del backtest..."
+          rclone copy ./ml_engine/ gdrive:p2p_datasets/ --verbose
