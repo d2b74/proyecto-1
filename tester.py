@@ -350,7 +350,7 @@ if __name__ == "__main__":
         'col_señal_scalper': 'scalper_usd',
         'col_señal_swing': 'swing_usd',
         'col_señal_estrategica': 'estrategica_usd',
-        'cluster_vars': ['hora_entrada', 'dia_semana_entrada'],
+        'cluster_vars': [ 'hora_entrada','dia_semana_entrada','ctx_dxy','ctx_btc_change_24h','ctx_fear_greed'],
         'bins_duracion': [0, 4, 12, 24, float('inf')],
         'labels_duracion': ['0-4h', '4-12h', '12-24h', '24h+'],
         'bins': 4
