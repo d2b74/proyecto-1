@@ -114,9 +114,12 @@ class BacktestEngine:
                 if res:
                     resultados.append(res)
         self.resultados = pd.DataFrame(resultados)
-        print(f"Backtest completado. {len(self.resultados)} operaciones simuladas.")
+        # Guardar resultados en CSV
+        resultados_path = os.path.join(self.data_root, self.asset, 'resultados_backtest.csv')
+        self.resultados.to_csv(resultados_path, index=False)
+        print(f"📊 Resultados guardados en {resultados_path}")
         return self.resultados
-
+    
     def analizar_por_cluster(self, columna, bins=None, df=None):
         if df is None:
             if self.resultados is None:
