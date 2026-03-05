@@ -16,17 +16,26 @@ class BacktestEngine:
         self.df.sort_values('timestamp', inplace=True)
         self.df.reset_index(drop=True, inplace=True)
         self.resultados = None
+        self.scalper_filtrados_btc = 0
+        self.scalper_totales = 0
 
     def _get_future_window(self, start_ts, max_minutes):
         end_ts = start_ts + timedelta(minutes=max_minutes)
         mask = (self.df['timestamp'] >= start_ts) & (self.df['timestamp'] <= end_ts)
         return self.df.loc[mask].copy()
+    
 
     def simular_operacion(self, row, tipo):
         col_señal = self.cfg[f'col_señal_{tipo}']
         monto = row.get(col_señal, 0)
         if monto <= 0:
             return None
+
+        # Filtro de BTC para scalper (evitar caídas > 1%)
+        if tipo == 'scalper':
+            btc_change = row.get('ctx_btc_change_24h', 0)
+            if btc_change <= -1.0:
+                return None
 
         target_pct = self.cfg['targets'][tipo] / 100
         stop_pct = self.cfg['stops'][tipo] / 100
@@ -106,18 +115,29 @@ class BacktestEngine:
         resultados = []
         total = len(self.df)
         print(f"Ejecutando backtest sobre {total} registros...")
+        self.scalper_filtrados_btc = 0
+        self.scalper_totales = 0
+
         for idx, row in self.df.iterrows():
             if idx % 1000 == 0:
                 print(f"Procesando {idx}/{total}")
+
+            # Contar señales de scalper
+            if row.get('scalper_usd', 0) > 0:
+                self.scalper_totales += 1
+                # Aplicar filtro BTC (si no pasa, no se simula)
+                if row.get('ctx_btc_change_24h', 0) <= -1.0:
+                    self.scalper_filtrados_btc += 1
+                    continue  # Saltamos esta señal
+
             for tipo in ['scalper', 'swing', 'estrategica']:
                 res = self.simular_operacion(row, tipo)
                 if res:
                     resultados.append(res)
+
         self.resultados = pd.DataFrame(resultados)
-        # Guardar resultados en CSV
-        resultados_path = os.path.join(self.data_root, self.asset, 'resultados_backtest.csv')
-        self.resultados.to_csv(resultados_path, index=False)
-        print(f"📊 Resultados guardados en {resultados_path}")
+        print(f"Backtest completado. {len(self.resultados)} operaciones simuladas.")
+        print(f"Señales de scalper totales: {self.scalper_totales}, filtradas por BTC: {self.scalper_filtrados_btc}")
         return self.resultados
     
     def analizar_por_cluster(self, columna, bins=None, df=None):
@@ -331,6 +351,16 @@ class BacktestEngine:
                     print(f"\n  {tipo.upper()}:")
                     print(comp.to_string(index=False))
 
+        # Nuevo: reporte de filtros aplicados
+        if hasattr(self, 'scalper_filtrados_btc'):
+            print("\n--- Filtros aplicados ---")
+            print(f"Señales de scalper totales: {self.scalper_totales}")
+            print(f"Señales de scalper filtradas por caída de BTC >1%: {self.scalper_filtrados_btc}")
+            # Estimación de capital liberado (suponiendo monto promedio de scalper)
+            monto_promedio_scalper = self.resultados[self.resultados['tipo']=='scalper']['monto_usd'].mean() if not self.resultados.empty else 20000*0.5
+            capital_liberado = self.scalper_filtrados_btc * monto_promedio_scalper
+            print(f"Capital liberado estimado: ${capital_liberado:,.2f} USD")
+
         print("\n" + "="*70)
 
 if __name__ == "__main__":
@@ -347,13 +377,13 @@ if __name__ == "__main__":
         'slippage_pct': 0.05,
         'targets': {'scalper': 0.2, 'swing': 0.4, 'estrategica': 0.8},
         'stops': {'scalper': 0.5, 'swing': 1.0, 'estrategica': 2.0},
-        'timeouts': {'scalper': 1440, 'swing': 10080, 'estrategica': 43200},
+        'timeouts': {'scalper': 240, 'swing': 10080, 'estrategica': 43200},  # scalper 4h
         'precio_entrada': 'vwap_c',
         'precio_salida': 'p_v',
         'col_señal_scalper': 'scalper_usd',
         'col_señal_swing': 'swing_usd',
         'col_señal_estrategica': 'estrategica_usd',
-        'cluster_vars': [ 'hora_entrada','dia_semana_entrada','ctx_dxy','ctx_btc_change_24h','ctx_fear_greed'],
+        'cluster_vars': ['hora_entrada','dia_semana_entrada','ctx_dxy','ctx_btc_change_24h','ctx_fear_greed'],
         'bins_duracion': [0, 4, 12, 24, float('inf')],
         'labels_duracion': ['0-4h', '4-12h', '12-24h', '24h+'],
         'bins': 4
