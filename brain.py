@@ -1,28 +1,67 @@
+
 import pandas as pd
-import os
 import numpy as np
+import os
 import calendar
 import json
 from datetime import datetime
-import pytz  
+import pytz
 from micro import MicroEngine
 from macro import MacroAnalizadorSystem
 from config import CONFIG
+
+
+COLUMNAS_BASE = [
+    # ── Micro ──────────────────────────────────────────────────────────────
+    'timestamp', 'asset',
+    'p_c', 'vwap_c', 'muro_c', 'full_c', 'nick_c',
+    'p_v', 'vwap_v', 'muro_v', 'full_v', 'nick_v',
+    'fuerza', 'trend_15m', 'cap_usd_real', 'ajustado',
+    # ── Macro — precios ────────────────────────────────────────────────────
+    'p_actual', 'min_24h', 'max_24h', 'var_24h', 'volatilidad', 'posicion_rel',
+    # ── Macro — MEP / Blue ─────────────────────────────────────────────────
+    'mep_avg', 'mep_gap_avg_24h', 'blue_avg',
+    'brecha_mep', 'brecha_blue',
+    # ── Macro — BTC / volumen ──────────────────────────────────────────────
+    'corr_btc', 'vol_proxy', 'n_muestras',
+    'brecha_velocity', 'distancia_media_brecha',
+    'btc_vol_15m', 'btc_vol_1h',
+    # ── Contexto temporal (calculado en Macro._get_contexto_temporal) ─────
+    # Nota: es_fin_de_mes (bool) ≠ dias_fin_mes (int). Son dos columnas distintas.
+    'hora', 'dia_semana', 'es_finde', 'es_feriado', 'es_horario_bancario',
+    'es_fin_de_mes',    # bool  — día >= 25 del mes            (Macro)
+    'es_lunes_manana',  # bool  — lunes entre 9-12h            (Macro)
+    'semana_del_mes',   # int   — semana del mes 1-5           (Macro)
+    # ── Capas de inteligencia (calculadas en Brain) ────────────────────────
+    'itc_score', 'confianza_ejec', 'liq_brecha_ratio', 'tension_spread',
+    'dias_fin_mes',     # int   — días enteros hasta fin de mes (Brain)
+    'semana_mes',       # int   — semana del mes (Brain, legacy)
+    'macro_disponible',
+    # ── Señales y targets ──────────────────────────────────────────────────
+    'scalper_usd', 'swing_usd', 'estrategica_usd',
+    'target_scalper_usd', 'target_swing_usd', 'target_estrategica_usd',
+    'tipo_estrategica',
+    # ── Métricas al momento de la señal ───────────────────────────────────
+    'spread_actual', 'factor_itc', 'factor_btc', 'factor_total',
+]
+
+
+MAX_EDAD_CONTEXTO_SEG = 7200  # 2 horas
+
 
 class OrquestadorSystemBrain:
 
     def __init__(self, cfg):
         self.cfg = cfg
         self.asset = cfg.get('asset', 'USDT').upper()
-        self.data_root = cfg['DATA_ROOT'] 
+        self.data_root = cfg['DATA_ROOT']
         self.base_path = os.path.join(self.data_root, self.asset)
         self.path_completo = os.path.join(self.base_path, 'signals.csv')
         self.path_decision_log = os.path.join(self.base_path, 'log.csv')
-        self.path_estado = os.path.join(self.data_root, 'status.json') 
+        self.path_estado = os.path.join(self.data_root, 'status.json')
         self.path_config_optima = os.path.join(self.base_path, 'best.json')
-        self.tz = pytz.timezone('America/Argentina/Buenos_Aires')  # <-- zona horaria
+        self.tz = pytz.timezone('America/Argentina/Buenos_Aires')
 
-        # Umbrales con valores por defecto
         defaults = {
             'itc_peligro': 65,
             'itc_oportunidad': 35,
@@ -36,9 +75,13 @@ class OrquestadorSystemBrain:
             'itc_threshold_scalper': 65,
             'itc_threshold_swing': 40,
             'itc_threshold_estrategica': 30,
+            'itc_threshold_estrategica_a': 45,
+            'distancia_brecha_min_a': -0.5,
+            'distancia_brecha_min_b': -1.5,
+            'itc_threshold_estrategica_b': 35,
             'factor_scalper': 1.0,
-            'factor_swing': 0.5,
-            'factor_estrategica': 0.8,
+            'factor_swing': 1.0,
+            'factor_estrategica': 1.0,
             'target_scalper_pct': 0.2,
             'target_swing_pct': 0.4,
             'target_estrategica_pct': 0.8,
@@ -46,13 +89,12 @@ class OrquestadorSystemBrain:
             'btc_vol_threshold': 0.005,
             'btc_penalty_factor': 0.7,
         }
-        self.umbrales = cfg.get('umbrales', defaults)
+        self.umbrales = {**defaults, **cfg.get('umbrales', {})}
 
         os.makedirs(self.base_path, exist_ok=True)
         self.cargar_configuracion_optima()
 
     def cargar_configuracion_optima(self):
-        # (sin cambios, igual que antes)
         self.optimizacion_aplicada = False
         if not os.path.exists(self.path_config_optima):
             print("📄 No se encontró best.json. Usando valores por defecto.")
@@ -65,10 +107,9 @@ class OrquestadorSystemBrain:
                 if tipo in config:
                     fecha_str = config[tipo].get('fecha_actualizacion')
                     if fecha_str:
-                        fecha = datetime.fromisoformat(fecha_str)
-                        dias = (ahora - fecha).days
+                        dias = (ahora - datetime.fromisoformat(fecha_str)).days
                         if dias > config[tipo].get('dias_validez', 2):
-                            print(f"⚠️  Configuración para {tipo} tiene {dias} días (excede validez).")
+                            print(f"⚠️  Config {tipo} tiene {dias} días (excede validez).")
             if 'scalper' in config:
                 self.umbrales['itc_threshold_scalper'] = config['scalper'].get('itc_threshold', 65)
                 self.umbrales['spread_min_scalper'] = config['scalper'].get('spread_min', 0.15)
@@ -82,10 +123,8 @@ class OrquestadorSystemBrain:
             print("✅ Configuración óptima cargada desde best.json.")
         except Exception as e:
             print(f"❌ Error al cargar best.json: {e}. Usando valores por defecto.")
-            self.optimizacion_aplicada = False
 
     def verificar_estado(self):
-        # (sin cambios)
         if not os.path.exists(self.path_estado):
             return True
         try:
@@ -96,7 +135,6 @@ class OrquestadorSystemBrain:
             return True
 
     def log_decision(self, micro, macro, tipo, monto, razon, spread_teorico, cumplio_condiciones=True):
-        # (sin cambios)
         registro = {
             'timestamp': micro['timestamp'],
             'tipo': tipo,
@@ -125,7 +163,6 @@ class OrquestadorSystemBrain:
             print(f"❌ Error escribiendo en log.csv: {e}")
 
     def _obtener_contexto_reciente(self):
-        """Lee el archivo de contexto y devuelve el registro más cercano al momento actual."""
         contexto_path = os.path.join(self.data_root, 'contexto', 'contexto.csv')
         if not os.path.exists(contexto_path):
             print("⚠️ No hay archivo de contexto.")
@@ -135,14 +172,13 @@ class OrquestadorSystemBrain:
             if df.empty:
                 return {}
             ultimo = df.iloc[-1].to_dict()
-            # Asegurar que el timestamp tenga zona horaria (Argentina)
             ts = ultimo['timestamp']
             if ts.tzinfo is None:
                 ts = self.tz.localize(ts)
-            ahora = datetime.now(self.tz)
-            diff = ahora - ts
-            if diff.total_seconds() > 7200:  # 2 horas de tolerancia
-                print(f"⚠️ Contexto demasiado antiguo ({diff.total_seconds()/3600:.1f}h). No se usará.")
+            edad_seg = (datetime.now(self.tz) - ts).total_seconds()
+            if edad_seg > MAX_EDAD_CONTEXTO_SEG:
+                print(f"⚠️ Contexto con {edad_seg/3600:.1f}h de antigüedad "
+                      f"(límite: {MAX_EDAD_CONTEXTO_SEG/3600:.0f}h). No se usará.")
                 return {}
             return ultimo
         except Exception as e:
@@ -150,15 +186,21 @@ class OrquestadorSystemBrain:
             return {}
 
     def calcular_capas_de_inteligencia(self, micro, macro):
-        # (sin cambios)
         if not macro:
             macro = {}
-        brecha_mep = abs(macro.get('brecha_mep', 0))
-        b_norm = min(100, max(0, brecha_mep * 12.5))
+
+        # ITC con brecha con signo:
+        #   brecha positiva → prima normal → suma tensión
+        #   brecha negativa → anomalía/oportunidad → NO suma tensión
+        brecha_mep_signed = macro.get('brecha_mep', 0)
+        b_norm = min(100, max(0, brecha_mep_signed * 12.5)) if brecha_mep_signed > 0 else 0
+
         volatilidad = macro.get('volatilidad', 0)
         v_norm = min(100, max(0, volatilidad * 45000))
+
         fuerza = micro.get('fuerza', 1)
         f_norm = 100 - min(100, max(0, fuerza * 50))
+
         itc = (b_norm * 0.4) + (v_norm * 0.3) + (f_norm * 0.3)
 
         muro_total = micro.get('muro_c', 0) + micro.get('muro_v', 0)
@@ -166,18 +208,19 @@ class OrquestadorSystemBrain:
         f_volat = max(0.1, 1 - (volatilidad * 500))
         confianza = round(f_muro * f_volat * 100, 1)
 
-        brecha_abs = abs(macro.get('brecha_mep', 0)) + 0.01
+        brecha_abs = abs(brecha_mep_signed) + 0.01
         liq_brecha_ratio = micro.get('muro_c', 0) / brecha_abs
 
         p_c = micro.get('p_c', 1)
         p_v = micro.get('p_v', 1)
-        spread_actual = abs(((p_v / p_c) - 1) * 100)
+        # Spread con signo: positivo = operable, negativo = mercado cruzado
+        spread_actual = ((p_v / p_c) - 1) * 100
         tension_spread = spread_actual / (volatilidad * 1000 + 0.001)
 
         ts = micro['timestamp']
         ultimo_dia = calendar.monthrange(ts.year, ts.month)[1]
-        dias_fin_mes = ultimo_dia - ts.day
-        semana_mes = (ts.day - 1) // 7 + 1
+        dias_fin_mes = ultimo_dia - ts.day   # int: días hasta fin de mes
+        semana_mes = (ts.day - 1) // 7 + 1  # int: semana del mes (1-5)
 
         return (round(itc, 2), confianza, round(liq_brecha_ratio, 2),
                 round(tension_spread, 2), dias_fin_mes, semana_mes)
@@ -185,7 +228,7 @@ class OrquestadorSystemBrain:
     def calcular_factor_riesgo_itc(self, itc):
         riesgo_min = self.umbrales.get('riesgo_minimo_factor', 0.2)
         factor = 1 - (itc / 100) * (1 - riesgo_min)
-        return max(riesgo_min, min(1, factor))
+        return round(max(riesgo_min, min(1, factor)), 2)
 
     def calcular_factor_riesgo_btc(self, macro):
         if not macro:
@@ -194,84 +237,122 @@ class OrquestadorSystemBrain:
         umbral = self.umbrales.get('btc_vol_threshold', 0.005)
         if btc_vol > umbral:
             exceso = min(btc_vol / umbral - 1, 3)
-            factor = max(0.2, 1 - exceso * 0.2)
-            return round(factor, 2)
+            return round(max(0.2, 1 - exceso * 0.2), 2)
         return 1.0
 
-    def calcular_tamanos_ventanas(self, micro, macro, capital_base, confianza, itc):
-        # (sin cambios)
+    def calcular_tamanos_ventanas(self, micro, macro, itc):
+        """
+        Capital: siempre 100% del total configurado (concentración, no fragmentación).
+        El operador elige manualmente UNA señal entre las que se activan.
+        """
         umbrales = self.umbrales
+        capital_base = self.cfg['capital_usd']
+
         p_c = micro.get('p_c', 1)
         p_v = micro.get('p_v', 1)
-        spread_actual = ((p_v / p_c) - 1) * 100
+        spread_actual = ((p_v / p_c) - 1) * 100   # con signo, sin abs()
         trend_15m = micro.get('trend_15m', 0)
         posicion_rel = macro.get('posicion_rel', 50) if macro else 50
+        distancia_media = macro.get('distancia_media_brecha', 0) if macro else 0
 
         factor_itc = self.calcular_factor_riesgo_itc(itc)
         factor_btc = self.calcular_factor_riesgo_btc(macro)
-        factor_total = factor_itc * factor_btc
+        factor_total = round(factor_itc * factor_btc, 2)
 
-        # Scalper
-        if (spread_actual > umbrales.get('spread_min_scalper', 0.15) and
-            itc <= umbrales.get('itc_threshold_scalper', 65)):
-            monto_scalper = capital_base * (confianza / 100) * umbrales.get('factor_scalper', 1.0) * factor_total
-            target_scalper = p_c * (1 + umbrales.get('target_scalper_pct', 0.2)/100)
-            razon_scalper = f"Spread {spread_actual:.2f}% > umbral, ITC {itc} <= {umbrales['itc_threshold_scalper']}"
+        # ── SCALPER ──────────────────────────────────────────────────────────
+        scalper_ok = (
+            spread_actual > umbrales.get('spread_min_scalper', 0.15) and
+            itc <= umbrales.get('itc_threshold_scalper', 65)
+        )
+        if scalper_ok:
+            monto_scalper = capital_base * umbrales.get('factor_scalper', 1.0) * factor_total
+            target_scalper = p_c * (1 + umbrales.get('target_scalper_pct', 0.2) / 100)
+            razon_scalper = (f"Spread {spread_actual:.2f}% > umbral | "
+                             f"ITC {itc:.1f} ≤ {umbrales['itc_threshold_scalper']}")
         else:
-            monto_scalper = 0
-            target_scalper = 0
-            razon_scalper = f"Spread {spread_actual:.2f}% <= umbral o ITC {itc} > {umbrales.get('itc_threshold_scalper',65)}"
+            monto_scalper, target_scalper = 0, 0
+            if spread_actual <= 0:
+                razon_no = "mercado cruzado"
+            elif spread_actual <= umbrales.get('spread_min_scalper', 0.15):
+                razon_no = f"spread {spread_actual:.2f}% ≤ umbral"
+            else:
+                razon_no = f"ITC {itc:.1f} > {umbrales.get('itc_threshold_scalper', 65)}"
+            razon_scalper = f"Sin señal: {razon_no}"
 
-        # Swing
-        itc_swing_ok = itc <= umbrales.get('itc_threshold_swing', 40)
-        if trend_15m > umbrales.get('trend_min_swing', 0.1) and itc_swing_ok:
-            monto_swing = capital_base * (confianza / 100) * umbrales.get('factor_swing', 0.5) * factor_total
-            target_swing = p_c * (1 + umbrales.get('target_swing_pct', 0.4)/100)
-            razon_swing = f"Trend {trend_15m:.4f}% > umbral, ITC {itc} <= {umbrales.get('itc_threshold_swing',40)}"
+        # ── SWING ─────────────────────────────────────────────────────────────
+        swing_ok = (
+            trend_15m > umbrales.get('trend_min_swing', 0.1) and
+            itc <= umbrales.get('itc_threshold_swing', 40)
+        )
+        if swing_ok:
+            monto_swing = capital_base * umbrales.get('factor_swing', 1.0) * factor_total
+            target_swing = p_c * (1 + umbrales.get('target_swing_pct', 0.4) / 100)
+            razon_swing = (f"Trend 15m {trend_15m:.4f}% > umbral | "
+                           f"ITC {itc:.1f} ≤ {umbrales.get('itc_threshold_swing', 40)}")
         else:
-            monto_swing = 0
-            target_swing = 0
-            razon_swing = f"Trend {trend_15m:.4f}% <= umbral o ITC {itc} > {umbrales.get('itc_threshold_swing',40)}"
+            monto_swing, target_swing = 0, 0
+            razon_swing = (f"Sin señal: trend {trend_15m:.4f}% o "
+                           f"ITC {itc:.1f} > {umbrales.get('itc_threshold_swing', 40)}")
 
-        # Estratégica
-        itc_estr_ok = itc <= umbrales.get('itc_threshold_estrategica', 30)
-        if posicion_rel < umbrales.get('posicion_max_estrategica', 20) and itc_estr_ok:
-            monto_estrategica = capital_base * (confianza / 100) * umbrales.get('factor_estrategica', 0.8) * factor_total
-            target_estrategica = p_c * (1 + umbrales.get('target_estrategica_pct', 0.8)/100)
-            razon_estr = f"Posición {posicion_rel:.1f}% < umbral, ITC {itc} <= {umbrales.get('itc_threshold_estrategica',30)}"
+        # ── ESTRATÉGICA (Tipo A / Tipo B) ─────────────────────────────────────
+        # Tipo A: precio en piso de 24h + ITC moderado + brecha debajo de media
+        # Tipo B: anomalía pura de brecha MEP, independiente del precio nominal
+        cond_estr_a = (
+            posicion_rel < umbrales.get('posicion_max_estrategica', 20) and
+            itc <= umbrales.get('itc_threshold_estrategica_a', 45) and
+            distancia_media < umbrales.get('distancia_brecha_min_a', -0.5)
+        )
+        cond_estr_b = (
+            distancia_media < umbrales.get('distancia_brecha_min_b', -1.5) and
+            itc <= umbrales.get('itc_threshold_estrategica_b', 35)
+        )
+
+        if cond_estr_a or cond_estr_b:
+            tipo_estr = 'A' if cond_estr_a else 'B'
+            monto_estrategica = capital_base * umbrales.get('factor_estrategica', 1.0) * factor_total
+            target_estrategica = p_c * (1 + umbrales.get('target_estrategica_pct', 0.8) / 100)
+            if cond_estr_a:
+                razon_estr = (f"[TIPO A] Posición {posicion_rel:.1f}% < umbral | "
+                              f"ITC {itc:.1f} ≤ {umbrales.get('itc_threshold_estrategica_a', 45)} | "
+                              f"Brecha {distancia_media:+.2f}%")
+            else:
+                razon_estr = (f"[TIPO B] Anomalía brecha: {distancia_media:+.2f}% < "
+                              f"{umbrales.get('distancia_brecha_min_b', -1.5)}% | "
+                              f"ITC {itc:.1f} ≤ {umbrales.get('itc_threshold_estrategica_b', 35)}")
         else:
-            monto_estrategica = 0
-            target_estrategica = 0
-            razon_estr = f"Posición {posicion_rel:.1f}% >= umbral o ITC {itc} > {umbrales.get('itc_threshold_estrategica',30)}"
+            tipo_estr = None
+            monto_estrategica, target_estrategica = 0, 0
+            razon_estr = (f"Sin señal: posición {posicion_rel:.1f}% | "
+                          f"brecha {distancia_media:+.2f}% | ITC {itc:.1f}")
 
-        self.log_decision(micro, macro, 'scalper', monto_scalper, razon_scalper, spread_actual, monto_scalper>0)
-        self.log_decision(micro, macro, 'swing', monto_swing, razon_swing, spread_actual, monto_swing>0)
-        self.log_decision(micro, macro, 'estrategica', monto_estrategica, razon_estr, spread_actual, monto_estrategica>0)
+        self.log_decision(micro, macro, 'scalper', monto_scalper, razon_scalper, spread_actual, monto_scalper > 0)
+        self.log_decision(micro, macro, 'swing', monto_swing, razon_swing, spread_actual, monto_swing > 0)
+        self.log_decision(micro, macro, 'estrategica', monto_estrategica, razon_estr, spread_actual, monto_estrategica > 0)
 
         return {
-            'scalper_usd': round(monto_scalper, 2),
-            'swing_usd': round(monto_swing, 2),
-            'estrategica_usd': round(monto_estrategica, 2),
-            'target_scalper_usd': round(target_scalper, 2) if target_scalper else 0,
-            'target_swing_usd': round(target_swing, 2) if target_swing else 0,
+            'scalper_usd':            round(monto_scalper, 2),
+            'swing_usd':              round(monto_swing, 2),
+            'estrategica_usd':        round(monto_estrategica, 2),
+            'target_scalper_usd':     round(target_scalper, 2)     if target_scalper     else 0,
+            'target_swing_usd':       round(target_swing, 2)       if target_swing       else 0,
             'target_estrategica_usd': round(target_estrategica, 2) if target_estrategica else 0,
-            'spread_actual': round(spread_actual, 2),
-            'trend_15m': round(trend_15m, 4),
-            'posicion_rel': round(posicion_rel, 1),
-            'factor_itc': round(factor_itc, 2),
-            'factor_btc': round(factor_btc, 2),
-            'factor_total': round(factor_total, 2)
+            'tipo_estrategica':       tipo_estr,
+            'spread_actual':          round(spread_actual, 2),
+            'trend_15m':              round(trend_15m, 4),
+            'posicion_rel':           round(posicion_rel, 1),
+            'factor_itc':             factor_itc,
+            'factor_btc':             factor_btc,
+            'factor_total':           factor_total,
         }
 
     def ejecutar_ciclo(self):
         if not self.verificar_estado():
-            print("⏸️ Sistema en pausa (status.json = paused). No se ejecuta el ciclo.")
+            print("⏸️ Sistema en pausa. No se ejecuta el ciclo.")
             return None
 
         self.cargar_configuracion_optima()
-        print(f"🧠 [MODO DIOS] FUSIÓN TOTAL | {self.asset}")
+        print(f"🧠 [ORÁCULO] | {self.asset}")
 
-        # Leer contexto exterior
         contexto = self._obtener_contexto_reciente()
 
         micro = MicroEngine(self.cfg).run()
@@ -281,26 +362,27 @@ class OrquestadorSystemBrain:
 
         macro = MacroAnalizadorSystem(self.cfg).ejecutar(timestamp_referencia=micro['timestamp'])
 
-        itc, confianza, liq_brecha, tension_spread, dfm, semana = self.calcular_capas_de_inteligencia(micro, macro)
-        capital_base = micro.get('cap_usd_real', 1000)
-        tamanos = self.calcular_tamanos_ventanas(micro, macro, capital_base, confianza, itc)
+        itc, confianza, liq_brecha, tension_spread, dfm, semana = \
+            self.calcular_capas_de_inteligencia(micro, macro)
+
+        tamanos = self.calcular_tamanos_ventanas(micro, macro, itc)
 
         registro = {
             **micro,
             **(macro if macro else {}),
-            'itc_score': itc,
-            'confianza_ejec': confianza,
+            'itc_score':        itc,
+            'confianza_ejec':   confianza,
             'liq_brecha_ratio': liq_brecha,
-            'tension_spread': tension_spread,
-            'dias_fin_mes': dfm,
-            'semana_mes': semana,
+            'tension_spread':   tension_spread,
+            'dias_fin_mes':     dfm,       # int — días hasta fin de mes    (Brain)
+            'semana_mes':       semana,    # int — semana del mes 1-5        (Brain)
             'macro_disponible': 1 if macro else 0,
             **tamanos,
         }
 
-        # Agregar contexto con prefijo
+        # Prefijo ctx_ para contexto exterior (nunca colisiona con columnas de Macro)
         for k, v in contexto.items():
-            if k != 'timestamp':  # no duplicar timestamp
+            if k != 'timestamp':
                 registro[f'ctx_{k}'] = v
 
         self._guardar_completo(registro)
@@ -308,61 +390,53 @@ class OrquestadorSystemBrain:
         return registro
 
     def _guardar_completo(self, registro):
+        """
+        Escritura atómica + columnas estables.
+
+        Garantías:
+          1. Escritura atómica (.tmp → os.replace): el Brain nunca lee un CSV
+             parcialmente escrito aunque el proceso sea interrumpido.
+          2. Columnas nuevas en el registro actual → NaN en filas históricas.
+             Las columnas NUNCA se corren de lugar: lectura siempre por nombre.
+          3. Orden fijo: COLUMNAS_BASE + ctx_* alfabético.
+        """
         df_new = pd.DataFrame([registro])
-        
-        # Lista base en orden fijo (la misma que usaste para reparar)
-        columnas_base = ['timestamp', 'asset', 'p_c', 'vwap_c', 'muro_c', 'full_c', 'nick_c',
-                         'p_v', 'vwap_v', 'muro_v', 'full_v', 'nick_v', 'fuerza', 'trend_15m',
-                         'cap_usd_real', 'ajustado', 'p_actual', 'min_24h', 'max_24h', 'var_24h',
-                         'volatilidad', 'posicion_rel', 'mep_avg', 'mep_gap_avg_24h', 'blue_avg',
-                         'brecha_mep', 'brecha_blue', 'corr_btc', 'vol_proxy', 'n_muestras',
-                         'brecha_velocity', 'distancia_media_brecha', 'btc_vol_15m', 'btc_vol_1h',
-                         'hora', 'dia_semana', 'es_finde', 'es_feriado', 'es_horario_bancario',
-                         'itc_score', 'confianza_ejec', 'liq_brecha_ratio', 'tension_spread',
-                         'dias_fin_mes', 'semana_mes', 'macro_disponible', 'scalper_usd',
-                         'swing_usd', 'estrategica_usd', 'target_scalper_usd', 'target_swing_usd',
-                         'target_estrategica_usd', 'spread_actual', 'factor_itc', 'factor_btc',
-                         'factor_total']
-        
+
+        cols_ctx_actuales = sorted([c for c in registro.keys() if c.startswith('ctx_')])
+        columnas_target = COLUMNAS_BASE + cols_ctx_actuales
+
         if os.path.exists(self.path_completo):
-            # Leer existente
             df_existing = pd.read_csv(self.path_completo, parse_dates=['timestamp'])
-            
-            # Detectar columnas de contexto ya existentes
-            cols_existing = set(df_existing.columns)
-            cols_nuevas = set(registro.keys()) - cols_existing
-            
-            # Agregar columnas nuevas al DataFrame existente (con NaN)
-            for col in cols_nuevas:
-                df_existing[col] = pd.NA
-            
-            # Asegurar que df_new tenga todas las columnas (las existentes + las nuevas)
-            todas_columnas = cols_existing | cols_nuevas
-            df_new = df_new.reindex(columns=todas_columnas)
-            
-            # Ordenar: primero columnas_base (las que existen), luego contexto alfabético
-            columnas_contexto = sorted([c for c in todas_columnas if c.startswith('ctx_')])
-            columnas_finales = [c for c in columnas_base if c in todas_columnas] + columnas_contexto
-            
-            # Reindexar ambos DataFrames
-            df_existing = df_existing[columnas_finales]
-            df_new = df_new[columnas_finales]
-            
-            # Concatenar
+
+            # Unión de ctx_* conocidas (históricas) + nuevas
+            cols_ctx_hist = sorted([c for c in df_existing.columns if c.startswith('ctx_')])
+            todos_ctx = sorted(set(cols_ctx_hist) | set(cols_ctx_actuales))
+            columnas_target = COLUMNAS_BASE + todos_ctx
+
+            # Añadir columnas faltantes con NaN (sin correr datos existentes)
+            for col in columnas_target:
+                if col not in df_existing.columns:
+                    df_existing[col] = pd.NA
+                if col not in df_new.columns:
+                    df_new[col] = pd.NA
+
+            df_existing = df_existing.reindex(columns=columnas_target)
+            df_new      = df_new.reindex(columns=columnas_target)
             df_final = pd.concat([df_existing, df_new], ignore_index=True)
         else:
-            # Primera vez: solo ordenar columnas_base y contexto
-            columnas_contexto = sorted([c for c in registro.keys() if c.startswith('ctx_')])
-            columnas_finales = columnas_base + columnas_contexto
-            df_final = df_new[columnas_finales]
-        
-        df_final.to_csv(self.path_completo, index=False)
-        print(f"📂 Registro guardado en: {self.path_completo}")
+            df_new   = df_new.reindex(columns=columnas_target)
+            df_final = df_new
+
+        # Escritura atómica
+        tmp_path = self.path_completo + '.tmp'
+        df_final.to_csv(tmp_path, index=False)
+        os.replace(tmp_path, self.path_completo)   # atómico en el mismo filesystem
+        print(f"📂 Registro guardado ({len(df_final)} filas): {self.path_completo}")
 
     def _reporte_maestro(self, micro, macro, itc, confianza, liq_brecha, tamanos):
-        # (sin cambios)
         print("\n" + "█" * 70)
-        print(f"🦅 THEORACLE BRAIN | {self.asset} | ITC: {itc} | CONF: {confianza}%")
+        print(f"🦅 ORÁCULO | {self.asset} | ITC: {itc:.1f} | CONF: {confianza}%")
+
         if itc < self.umbrales['itc_oportunidad']:
             status = "🟢 ESTABLE"
         elif itc < self.umbrales['itc_peligro']:
@@ -370,69 +444,76 @@ class OrquestadorSystemBrain:
         else:
             status = "🔴 PELIGRO"
         print(f"STATUS: {status} | {micro['timestamp'].strftime('%d/%m/%Y %H:%M:%S')}")
-        print(f"Factor Riesgo (ITC): {tamanos['factor_itc']} | Factor BTC: {tamanos['factor_btc']} | Total: {tamanos['factor_total']}")
-
-        if self.optimizacion_aplicada:
-            print("⚙️ REGLAS: Optimización del Backtest Aplicada ✅")
-        else:
-            print("⚙️ REGLAS: Usando valores por defecto (sin optimización)")
-
-        print(f"Umbrales activos: Scalper ITC ≤ {self.umbrales.get('itc_threshold_scalper',65)} | Spread ≥ {self.umbrales.get('spread_min_scalper',0.15)}%")
+        print(f"Factor Riesgo: ITC={tamanos['factor_itc']} | BTC={tamanos['factor_btc']} "
+              f"| Total={tamanos['factor_total']}")
+        estado_cfg = "✅ Optimización aplicada" if self.optimizacion_aplicada else "⚙️ Valores por defecto"
+        print(f"Reglas: {estado_cfg} | Capital: ${self.cfg['capital_usd']:,.0f} USD (100%)")
+        print(f"Scalper: ITC ≤ {self.umbrales.get('itc_threshold_scalper',65)} | "
+              f"Spread ≥ {self.umbrales.get('spread_min_scalper',0.15)}%")
         print("─" * 70)
 
+        spread = tamanos['spread_actual']
+        spread_tag = f"{spread:+.2f}%" + (" ✅" if spread > 0 else " ❌ CRUZADO")
         print(f"📥 COMPRA: ${micro.get('p_c',0):.2f} | VWAP: ${micro.get('vwap_c',0):.2f} | "
-              f"Muro: {micro.get('muro_c',0):,.0f} | Elite: {micro.get('nick_c','N/A')}")
+              f"Muro: {micro.get('muro_c',0):,.0f} | {micro.get('nick_c','N/A')}")
         print(f"📤 VENTA:  ${micro.get('p_v',0):.2f} | VWAP: ${micro.get('vwap_v',0):.2f} | "
-              f"Muro: {micro.get('muro_v',0):,.0f} | Elite: {micro.get('nick_v','N/A')}")
+              f"Spread: {spread_tag}")
 
         if macro:
-            mep_avg = macro.get('mep_avg',0)
-            brecha_mep = macro.get('brecha_mep',0)
-            mep_gap_avg = macro.get('mep_gap_avg_24h',0)
-            brecha_velocity = macro.get('brecha_velocity',0)
-            distancia_media = macro.get('distancia_media_brecha',0)
-            btc_vol = macro.get('btc_vol_15m',0)
-            print(f"💵 FINANZAS: MEP ${mep_avg:.2f} | Brecha: {brecha_mep:+.2f}% (Prom: {mep_gap_avg:+.2f}%)")
-            print(f"⚡ Velocidad brecha: {brecha_velocity:.4f} %/h | Distancia a media: {distancia_media:+.2f}%")
-            print(f"₿ BTC Vol 15m: {btc_vol:.6f}")
-            ctx = []
-            if macro.get('es_horario_bancario'): ctx.append("🏦 BANCARIO")
-            else: ctx.append("🌙 EXTRA-B")
-            if macro.get('es_feriado'): ctx.append("⚠️ FERIADO")
-            print(f"🕒 CONTEXTO: {' | '.join(ctx)} | Ratio L/B: {liq_brecha:,.0f}")
+            print(f"💵 MEP: ${macro.get('mep_avg',0):.2f} | "
+                  f"Brecha: {macro.get('brecha_mep',0):+.2f}% "
+                  f"(Prom 24h: {macro.get('mep_gap_avg_24h',0):+.2f}%)")
+            print(f"⚡ Vel. brecha: {macro.get('brecha_velocity',0):.4f} %/h | "
+                  f"Dist. a media: {macro.get('distancia_media_brecha',0):+.2f}%")
+            print(f"₿  BTC Vol 15m: {macro.get('btc_vol_15m',0):.6f}")
+            alertas = []
+            if macro.get('es_fin_de_mes'):
+                alertas.append("📅 FIN DE MES — presión compradora esperada")
+            if macro.get('es_lunes_manana'):
+                alertas.append("🔔 LUNES MAÑANA — spreads artificiales posibles")
+            if not macro.get('es_horario_bancario'):
+                alertas.append("🌙 FUERA DE HORARIO BANCARIO")
+            if macro.get('es_feriado'):
+                alertas.append("⚠️ FERIADO")
+            for a in alertas:
+                print(f"🕒 {a}")
+            print(f"   Ratio L/B: {liq_brecha:,.0f}")
         else:
-            print("💵 FINANZAS: No hay datos macro")
+            print("💵 FINANZAS: No hay datos macro disponibles.")
 
         print("─" * 70)
-        print("💡 VEREDICTO POR VENTANA:")
+        print("💡 VEREDICTO:")
+
         if tamanos['scalper_usd'] > 0:
-            print(f"   🕐 SCALPER (ahora): ${tamanos['scalper_usd']:,.0f} USD  "
-                  f"(Spread: {tamanos['spread_actual']:+.2f}%)  🎯 Target: ${tamanos['target_scalper_usd']:.2f}")
+            print(f"   🕐 SCALPER:     ${tamanos['scalper_usd']:,.0f} USD | "
+                  f"Spread {spread:+.2f}% | 🎯 ${tamanos['target_scalper_usd']:.2f}")
         else:
-            print(f"   🕐 SCALPER: Sin señal (spread {tamanos['spread_actual']:+.2f}% o ITC > umbral)")
+            print(f"   🕐 SCALPER:     Sin señal")
 
         if tamanos['swing_usd'] > 0:
-            print(f"   🕒 SWING (15-60m):   ${tamanos['swing_usd']:,.0f} USD  "
-                  f"(Trend: {tamanos['trend_15m']:+.4f}%)  🎯 Target: ${tamanos['target_swing_usd']:.2f}")
+            print(f"   🕒 SWING:       ${tamanos['swing_usd']:,.0f} USD | "
+                  f"Trend {tamanos['trend_15m']:+.4f}% | 🎯 ${tamanos['target_swing_usd']:.2f}")
         else:
-            print(f"   🕒 SWING: Sin señal (trend {tamanos['trend_15m']:+.4f}% o ITC > umbral)")
+            print(f"   🕒 SWING:       Sin señal")
 
         if tamanos['estrategica_usd'] > 0:
-            print(f"   📅 ESTRATÉGICA (24h): ${tamanos['estrategica_usd']:,.0f} USD  "
-                  f"(Posición: {tamanos['posicion_rel']:.1f}%)  🎯 Target: ${tamanos['target_estrategica_usd']:.2f}")
+            print(f"   📅 ESTRATÉGICA: ${tamanos['estrategica_usd']:,.0f} USD "
+                  f"[TIPO {tamanos.get('tipo_estrategica','?')}] | "
+                  f"🎯 ${tamanos['target_estrategica_usd']:.2f}")
         else:
-            print(f"   📅 ESTRATÉGICA: Sin señal (posición {tamanos['posicion_rel']:.1f}% o ITC > umbral)")
+            print(f"   📅 ESTRATÉGICA: Sin señal")
 
-        if confianza < self.umbrales.get('confianza_minima',50):
+        # Alertas de riesgo
+        if confianza < self.umbrales.get('confianza_minima', 50):
             print("• [RIESGO] 🚩 BAJA CONFIANZA: Puntas inestables.")
-
-        fuerza = micro.get('fuerza',1)
-        var_24h = macro.get('var_24h',0) if macro else 0
-        if fuerza < self.umbrales.get('fuerza_baja',0.4) and var_24h > self.umbrales.get('var_umbral',0.5):
+        fuerza = micro.get('fuerza', 1)
+        var_24h = macro.get('var_24h', 0) if macro else 0
+        if fuerza < self.umbrales.get('fuerza_baja', 0.4) and var_24h > self.umbrales.get('var_umbral', 0.5):
             print("• [MOMENTUM] ⚠️ DIVERGENCIA: Debilidad de compra vs subida de precio.")
-
-        if macro and abs(macro.get('distancia_media_brecha',0)) > 2.0:
-            print(f"• [ALERTA] 📊 Brecha MEP muy desviada de su media: {macro['distancia_media_brecha']:+.2f}%")
+        if macro and abs(macro.get('distancia_media_brecha', 0)) > 2.0:
+            print(f"• [ALERTA] 📊 Brecha MEP muy desviada: {macro['distancia_media_brecha']:+.2f}%")
+        if spread <= 0:
+            print("• [MERCADO] 🚫 SPREAD NEGATIVO: Mercado cruzado. Scalper inhabilitado.")
 
         print("█" * 70 + "\n")
 
