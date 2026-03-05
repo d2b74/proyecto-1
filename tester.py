@@ -284,18 +284,26 @@ class BacktestEngine:
             json.dump(config, f, indent=4)
         print(f"✅ Configuración para {tipo} guardada en {path}")
 
+
     def generar_reporte(self):
         if self.resultados is None:
             print("Primero ejecuta el backtest.")
             return
-        print("\n" + "="*70)
-        print(" 🦅 REPORTE MAESTRO DE BACKTESTING")
-        print("="*70)
+        lineas = []
+        def _print(*args, **kwargs):
+            # Función auxiliar para imprimir y guardar
+            texto = ' '.join(str(a) for a in args)
+            print(texto, **kwargs)
+            lineas.append(texto)
+        
+        _print("\n" + "="*70)
+        _print(" 🦅 REPORTE MAESTRO DE BACKTESTING")
+        _print("="*70)
         for tipo in ['scalper', 'swing', 'estrategica']:
             mask = self.resultados['tipo'] == tipo
             df_tipo = self.resultados[mask]
             if len(df_tipo) == 0:
-                print(f"\n--- {tipo.upper()} --- Sin operaciones.")
+                _print(f"\n--- {tipo.upper()} --- Sin operaciones.")
                 continue
             win_rate = df_tipo['exito'].mean() * 100
             ganancia = df_tipo['ganancia_usd'].sum()
@@ -304,64 +312,68 @@ class BacktestEngine:
             target_rate = df_tipo['target_alcanzado'].mean() * 100
             stop_rate = df_tipo['stop_alcanzado'].mean() * 100
             timeout_rate = (df_tipo['resultado'] == 'timeout').mean() * 100
-            print(f"\n--- {tipo.upper()} ---")
-            print(f"Operaciones: {len(df_tipo)}")
-            print(f"Win Rate: {win_rate:.1f}%")
-            print(f"Ganancia total: ${ganancia:,.2f} USD")
-            print(f"Drawdown máximo promedio: {drawdown:.2f}%")
-            print(f"Duración promedio: {tiempo:.1f} horas")
-            print(f"Alcanzaron target: {target_rate:.1f}% | Stop: {stop_rate:.1f}% | Timeout: {timeout_rate:.1f}%")
-            print("\n  Análisis por Duración:")
+            _print(f"\n--- {tipo.upper()} ---")
+            _print(f"Operaciones: {len(df_tipo)}")
+            _print(f"Win Rate: {win_rate:.1f}%")
+            _print(f"Ganancia total: ${ganancia:,.2f} USD")
+            _print(f"Drawdown máximo promedio: {drawdown:.2f}%")
+            _print(f"Duración promedio: {tiempo:.1f} horas")
+            _print(f"Alcanzaron target: {target_rate:.1f}% | Stop: {stop_rate:.1f}% | Timeout: {timeout_rate:.1f}%")
+            _print("\n  Análisis por Duración:")
             df_duracion = self.analizar_por_duracion(tipo=tipo)
             if df_duracion is not None and len(df_duracion) > 0:
-                print(df_duracion.to_string(index=False))
-
+                _print(df_duracion.to_string(index=False))
+    
         # Análisis por clusters
         if 'cluster_vars' in self.cfg:
             for var in self.cfg['cluster_vars']:
                 if var in self.resultados.columns:
-                    print(f"\n--- Análisis por {var} ---")
-                    # Filtrar filas con NaN si la variable es de contexto
+                    _print(f"\n--- Análisis por {var} ---")
                     if var.startswith('ctx_'):
                         df_filtrado = self.resultados.dropna(subset=[var]).copy()
                         if df_filtrado.empty:
-                            print("   (sin datos con contexto)")
+                            _print("   (sin datos con contexto)")
                             continue
                     else:
                         df_filtrado = self.resultados
-        
+            
                     if pd.api.types.is_numeric_dtype(df_filtrado[var]):
                         bins = self.cfg.get('bins', 4)
-                        # Asegurar que haya al menos 2 puntos para crear bins
                         if len(df_filtrado) < 2:
-                            print("   (insuficientes datos para agrupar)")
+                            _print("   (insuficientes datos para agrupar)")
                             continue
                         df_cluster = self.analizar_por_cluster(var, bins=bins, df=df_filtrado)
                     else:
                         df_cluster = self.analizar_por_cluster(var, df=df_filtrado)
                     if df_cluster is not None and not df_cluster.empty:
-                        print(df_cluster.to_string(index=False))
-
+                        _print(df_cluster.to_string(index=False))
+    
         # Comparación por factor de riesgo
         if 'factor_total' in self.df.columns:
-            print("\n--- Comparación por Factor de Riesgo ---")
+            _print("\n--- Comparación por Factor de Riesgo ---")
             for tipo in ['scalper', 'swing', 'estrategica']:
                 comp = self.comparar_con_factor_riesgo('factor_total', tipo=tipo)
                 if comp is not None:
-                    print(f"\n  {tipo.upper()}:")
-                    print(comp.to_string(index=False))
-
-        # Nuevo: reporte de filtros aplicados
+                    _print(f"\n  {tipo.upper()}:")
+                    _print(comp.to_string(index=False))
+    
+        # Reporte de filtros aplicados
         if hasattr(self, 'scalper_filtrados_btc'):
-            print("\n--- Filtros aplicados ---")
-            print(f"Señales de scalper totales: {self.scalper_totales}")
-            print(f"Señales de scalper filtradas por caída de BTC >1%: {self.scalper_filtrados_btc}")
-            # Estimación de capital liberado (suponiendo monto promedio de scalper)
+            _print("\n--- Filtros aplicados ---")
+            _print(f"Señales de scalper totales: {self.scalper_totales}")
+            _print(f"Señales de scalper filtradas por caída de BTC >1%: {self.scalper_filtrados_btc}")
             monto_promedio_scalper = self.resultados[self.resultados['tipo']=='scalper']['monto_usd'].mean() if not self.resultados.empty else 20000*0.5
             capital_liberado = self.scalper_filtrados_btc * monto_promedio_scalper
-            print(f"Capital liberado estimado: ${capital_liberado:,.2f} USD")
+            _print(f"Capital liberado estimado: ${capital_liberado:,.2f} USD")
+    
+        _print("\n" + "="*70)
+    
+        # Guardar en archivo
+        reporte_path = os.path.join(self.data_root, self.asset, 'reporte_backtest.txt')
+        with open(reporte_path, 'w') as f:
+            f.write('\n'.join(lineas))
+        print(f"📄 Reporte guardado en {reporte_path}")
 
-        print("\n" + "="*70)
 
 if __name__ == "__main__":
     from config import CONFIG
