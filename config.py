@@ -1,5 +1,5 @@
 import os
-
+#config
 DATA_ROOT = os.getenv('DATA_ROOT', '/content/drive/MyDrive/p2p_datasets/')
 ASSET = 'USDT'
 CAPITAL_USD = 20000
