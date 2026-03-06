@@ -59,27 +59,13 @@ jobs:
           [ "$POST" = "$PRE" ] && echo "❌ El archivo no cambió." && exit 1
           echo "✅ Actualizado. Líneas: $(wc -l < "$FILE")"
 
-      # Sube contexto.csv
       - name: Subir contexto a Drive
         run: |
           rclone copy ./ml_engine/contexto/ gdrive:p2p_datasets/contexto/ \
             --checksum --verbose
-      - name: Descargar master.parquet desde caché del Pipeline
-        uses: actions/cache/restore@v3
-        with:
-          path: ml_engine
-          key: ml-engine-${{ runner.os }}
-        continue-on-error: true
 
-      - name: Subir master.parquet a Drive (backup horario)
+      - name: Verificar subida
         run: |
-          FILE="ml_engine/USDT/master.parquet"
-          if [ -f "$FILE" ]; then
-            SIZE=$(stat -c%s "$FILE")
-            echo "📤 Subiendo master.parquet a Drive (${SIZE} bytes)..."
-            rclone copy "$FILE" gdrive:p2p_datasets/USDT/ \
-              --checksum --verbose
-            echo "✅ master.parquet respaldado en Drive."
-          else
-            echo "⚠️  master.parquet no encontrado en caché. Se respaldará en la próxima hora."
-          fi
+          echo "🔍 Verificando Drive..."
+          rclone ls gdrive:p2p_datasets/contexto/ --verbose
+          echo "✅ OK"
