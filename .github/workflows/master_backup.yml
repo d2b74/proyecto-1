@@ -2,7 +2,7 @@ name: Master Parquet Backup
 
 on:
   schedule:
-    - cron: '0 * * * *'   # cada hora
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -14,9 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - run: pip install -r requirements.txt
 
       - name: Configurar Rclone
@@ -28,83 +30,56 @@ jobs:
       - name: Crear carpetas necesarias
         run: mkdir -p ml_engine/USDT ml_engine/raw
 
-      # Baja el master actual desde Drive (si existe) para hacer append
       - name: Descargar master.parquet actual desde Drive
         run: |
           rclone copy gdrive:p2p_datasets/USDT/master.parquet ./ml_engine/USDT/ \
             --checksum --verbose
         continue-on-error: true
 
-      # Baja todos los raw para que el manager pueda procesarlos
       - name: Descargar raw desde Drive
         run: |
           rclone copy gdrive:p2p_datasets/raw/ ./ml_engine/raw/ \
             --checksum --verbose
         continue-on-error: true
 
-      # Snapshot del master ANTES de correr el manager
       - name: Snapshot pre-ejecución
         run: |
           FILE="ml_engine/USDT/master.parquet"
           if [ -f "$FILE" ]; then
-            echo "$(stat -c%s "$FILE")"  > /tmp/master_pre_size
-            python3 -c "
-import pandas as pd
-df = pd.read_parquet('$FILE', columns=['timestamp'])
-print(len(df))
-" > /tmp/master_pre_filas
+            PRE_FILAS=$(python3 -c "import pandas as pd; df = pd.read_parquet('$FILE', columns=['timestamp']); print(len(df))" 2>/dev/null || echo "0")
           else
-            echo "0" > /tmp/master_pre_size
-            echo "0" > /tmp/master_pre_filas
+            PRE_FILAS=0
           fi
-          echo "📋 Master previo: $(cat /tmp/master_pre_filas) filas | $(cat /tmp/master_pre_size) bytes"
+          echo "$PRE_FILAS" > /tmp/master_pre_filas
+          echo "📋 Master previo: $PRE_FILAS filas"
 
       - name: Ejecutar Manager
         run: python manager.py
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      # Verificar que el master creció — nunca subir uno con menos datos
       - name: Verificar integridad del master
         run: |
           FILE="ml_engine/USDT/master.parquet"
-
           if [ ! -f "$FILE" ]; then
             echo "❌ master.parquet no existe después del manager."
             exit 1
           fi
-
           PRE_FILAS=$(cat /tmp/master_pre_filas)
-          POST_FILAS=$(python3 -c "
-import pandas as pd
-df = pd.read_parquet('$FILE', columns=['timestamp'])
-print(len(df))
-")
-          POST_SIZE=$(stat -c%s "$FILE")
-
-          echo "📋 Antes: ${PRE_FILAS} filas"
-          echo "📋 Después: ${POST_FILAS} filas | ${POST_SIZE} bytes"
-
+          POST_FILAS=$(python3 -c "import pandas as pd; df = pd.read_parquet('$FILE', columns=['timestamp']); print(len(df))" 2>/dev/null || echo "0")
+          echo "📋 Antes: $PRE_FILAS filas | Después: $POST_FILAS filas"
           if [ "$POST_FILAS" -lt "$PRE_FILAS" ]; then
-            echo "🛑 ABORTADO: el master nuevo tiene MENOS filas que el anterior."
-            echo "   No se sube para proteger los datos históricos."
+            echo "🛑 ABORTADO: el master nuevo tiene MENOS filas. No se sube."
             exit 1
           fi
-
           if [ "$POST_FILAS" -eq "$PRE_FILAS" ]; then
-            echo "ℹ️  El master no creció (no había datos nuevos en raw). No es necesario subir."
+            echo "ℹ️  Sin datos nuevos. No es necesario subir."
             exit 0
           fi
+          echo "✅ Master creció $((POST_FILAS - PRE_FILAS)) filas. Procediendo."
 
-          NUEVAS=$((POST_FILAS - PRE_FILAS))
-          echo "✅ Master creció ${NUEVAS} filas. Procediendo a subir."
-
-      # Sube el master verificado a Drive
       - name: Subir master.parquet a Drive
         run: |
-          FILE="ml_engine/USDT/master.parquet"
-          if [ -f "$FILE" ]; then
-            rclone copy "$FILE" gdrive:p2p_datasets/USDT/ \
-              --checksum --verbose
-            echo "✅ master.parquet actualizado en Drive."
-          fi
+          rclone copy ml_engine/USDT/master.parquet gdrive:p2p_datasets/USDT/ \
+            --checksum --verbose
+          echo "✅ master.parquet actualizado en Drive."
