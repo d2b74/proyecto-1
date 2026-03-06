@@ -5,6 +5,10 @@ on:
     - cron: '0 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: contexto-exterior
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -27,27 +31,24 @@ jobs:
       - name: Descargar contexto existente
         run: |
           mkdir -p ml_engine/contexto
-          rclone copy gdrive:p2p_datasets/contexto/ ml_engine/contexto/ \
+          rclone copy gdrive:p2p_datasets/contexto/ ./ml_engine/contexto/ \
             --verbose \
             --checksum
         continue-on-error: true
-        
+
       - name: Snapshot pre-ejecución
         run: |
           FILE="ml_engine/contexto/contexto.csv"
           if [ -f "$FILE" ]; then
             PRE_MD5=$(md5sum "$FILE" | cut -d' ' -f1)
-            PRE_SIZE=$(stat -c%s "$FILE")
             PRE_LINES=$(wc -l < "$FILE")
           else
             PRE_MD5="none"
-            PRE_SIZE=0
             PRE_LINES=0
           fi
           echo "$PRE_MD5"   > /tmp/ctx_pre_md5
-          echo "$PRE_SIZE"  > /tmp/ctx_pre_size
           echo "$PRE_LINES" > /tmp/ctx_pre_lines
-          echo "📋 Estado previo: ${PRE_LINES} líneas | ${PRE_SIZE} bytes | MD5: ${PRE_MD5}"
+          echo "📋 Estado previo: ${PRE_LINES} líneas | MD5: ${PRE_MD5}"
 
       - name: Ejecutar script de contexto
         run: python contexto.py
@@ -57,40 +58,30 @@ jobs:
       - name: Verificar que el archivo fue actualizado
         run: |
           FILE="ml_engine/contexto/contexto.csv"
-
           if [ ! -f "$FILE" ]; then
-            echo "❌ ERROR: contexto.csv no existe después de ejecutar el script."
+            echo "❌ ERROR: contexto.csv no existe después del script."
             exit 1
           fi
-
           PRE_MD5=$(cat /tmp/ctx_pre_md5)
-          PRE_SIZE=$(cat /tmp/ctx_pre_size)
           PRE_LINES=$(cat /tmp/ctx_pre_lines)
-
           POST_MD5=$(md5sum "$FILE" | cut -d' ' -f1)
-          POST_SIZE=$(stat -c%s "$FILE")
           POST_LINES=$(wc -l < "$FILE")
-
-          echo "📋 Estado previo: ${PRE_LINES} líneas | ${PRE_SIZE} bytes | MD5: ${PRE_MD5}"
-          echo "📋 Estado actual: ${POST_LINES} líneas | ${POST_SIZE} bytes | MD5: ${POST_MD5}"
-
+          echo "📋 Estado previo: ${PRE_LINES} líneas | MD5: ${PRE_MD5}"
+          echo "📋 Estado actual: ${POST_LINES} líneas | MD5: ${POST_MD5}"
           if [ "$POST_MD5" = "$PRE_MD5" ]; then
-            echo "❌ ERROR: El archivo no cambió (mismo MD5). El script no escribió datos nuevos."
-            echo "   Revisá los logs del paso 'Ejecutar script de contexto' para el error real."
+            echo "❌ ERROR: El archivo no cambió. Revisá los logs del script."
             exit 1
           fi
-
-          LINEAS_NUEVAS=$((POST_LINES - PRE_LINES))
-          echo "✅ Archivo actualizado correctamente. Líneas nuevas: ${LINEAS_NUEVAS}"
+          echo "✅ Actualizado. Líneas nuevas: $((POST_LINES - PRE_LINES))"
 
       - name: Subir contexto a Drive
         run: |
-          rclone copy ml_engine/contexto/ gdrive:p2p_datasets/contexto/ \
+          rclone copy ./ml_engine/contexto/ gdrive:p2p_datasets/contexto/ \
             --verbose \
             --checksum
 
-      - name: Verificar subida exitosa
+      - name: Verificar subida
         run: |
-          echo "🔍 Verificando contenido en Drive..."
+          echo "🔍 Verificando Drive..."
           rclone ls gdrive:p2p_datasets/contexto/ --verbose
-          echo "✅ Verificación completa."
+          echo "✅ OK"
