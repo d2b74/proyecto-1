@@ -5,42 +5,46 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: pipeline-completo
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
 
-      - name: Configurar Python
-        uses: actions/setup-python@v5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Instalar dependencias
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt
 
       - name: Configurar Rclone
         run: |
-          sudo apt-get install rclone
+          sudo apt-get install rclone -y
           mkdir -p ~/.config/rclone
           echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > ~/.config/rclone/rclone.conf
 
-      - name: Crear carpeta de datos local
-        run: mkdir -p ml_engine
-
-      # --- Caché para ml_engine ---
-      - name: Restaurar/Cachear ml_engine
+      - name: Restaurar caché de ml_engine
         uses: actions/cache@v3
         with:
           path: ml_engine
           key: ml-engine-${{ runner.os }}
           save-always: true
 
-      - name: Descargar datos nuevos desde Drive
+      - name: Crear carpetas necesarias
+        run: mkdir -p ml_engine/USDT
+
+      - name: Descargar datos USDT desde Drive
         run: |
-          echo "📥 Descargando solo archivos nuevos/modificados..."
-          rclone copy gdrive:p2p_datasets/ ./ml_engine/ --verbose --update
+          rclone copy gdrive:p2p_datasets/USDT/ ./ml_engine/USDT/ \
+            --verbose \
+            --checksum \
+            --exclude "resultados_backtest.csv" \
+            --exclude "reporte_backtest.txt"
         continue-on-error: true
 
       - name: Ejecutar Scraper
@@ -48,17 +52,20 @@ jobs:
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      - name: Ejecutar Manager (consolidación)
+      - name: Ejecutar Manager
         run: python manager.py
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      - name: Ejecutar Brain (orquestador)
+      - name: Ejecutar Brain
         run: python brain.py
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      - name: Subir todo a Drive
+      - name: Subir datos USDT a Drive
         run: |
-          echo "📤 Sincronizando cambios con Drive..."
-          rclone copy ./ml_engine/ gdrive:p2p_datasets/ --verbose
+          rclone copy ./ml_engine/USDT/ gdrive:p2p_datasets/USDT/ \
+            --verbose \
+            --checksum \
+            --exclude "resultados_backtest.csv" \
+            --exclude "reporte_backtest.txt"
