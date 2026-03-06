@@ -14,9 +14,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
+
       - run: pip install -r requirements.txt
 
       - name: Configurar Rclone
@@ -42,9 +44,27 @@ jobs:
             echo "⚠️  Caché perdido. Recuperando master.parquet desde Drive..."
             rclone copy gdrive:p2p_datasets/USDT/master.parquet ./ml_engine/USDT/ \
               --checksum --verbose
-            [ -f "$FILE" ] && echo "✅ Recuperado." || echo "ℹ️  No existe aún (primera corrida)."
+            [ -f "$FILE" ] && echo "✅ Recuperado." || echo "ℹ️  No existe aún."
           else
             echo "✅ master.parquet en caché ($(stat -c%s "$FILE") bytes)"
+          fi
+
+      - name: Verificar integridad de master.parquet
+        id: check_master
+        run: |
+          FILE="ml_engine/USDT/master.parquet"
+          if [ ! -f "$FILE" ]; then
+            echo "ℹ️  master.parquet no existe — primera corrida, se creará."
+            echo "master_ok=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          FILAS=$(python3 -c "import pandas as pd; df = pd.read_parquet('ml_engine/USDT/master.parquet', columns=['timestamp']); print(len(df))" 2>/dev/null || echo "0")
+          if [ "$FILAS" -gt 0 ]; then
+            echo "✅ master.parquet OK ($FILAS filas)"
+            echo "master_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "🛑 master.parquet corrupto o vacío. Master Backup lo recuperará."
+            echo "master_ok=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Descargar datos desde Drive
@@ -62,15 +82,23 @@ jobs:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
       - name: Ejecutar Manager
+        if: steps.check_master.outputs.master_ok == 'true'
         run: python manager.py
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
       - name: Ejecutar Brain
+        if: steps.check_master.outputs.master_ok == 'true'
         run: python brain.py
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
-          
+
+      - name: Saltar Manager y Brain (master no disponible)
+        if: steps.check_master.outputs.master_ok != 'true'
+        run: |
+          echo "⏭️  Master corrupto o ausente. Manager y Brain salteados."
+          echo "   Los raw del scraper se suben igual para no perder datos."
+
       - name: Subir datos a Drive
         run: |
           rclone copy ./ml_engine/ gdrive:p2p_datasets/ \
