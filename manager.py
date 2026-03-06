@@ -1,6 +1,7 @@
 import pandas as pd
 import glob
 import os
+import sys
 from datetime import datetime
 
 class DataConsolidator:
@@ -14,6 +15,19 @@ class DataConsolidator:
         self.control_file = os.path.join(self.base_path, '.last')
 
         os.makedirs(self.base_path, exist_ok=True)
+
+    def verificar_master(self):
+ 
+        if not os.path.exists(self.master_file):
+            return True, 0, "primera corrida — master se creará"
+
+        try:
+            df = pd.read_parquet(self.master_file, columns=['timestamp'])
+            if len(df) == 0:
+                return False, 0, "master existe pero está vacío"
+            return True, len(df), f"master OK ({len(df):,} filas)"
+        except Exception as e:
+            return False, 0, f"master corrupto o ilegible: {e}"
 
     def _get_last_master_timestamp(self):
         if not os.path.exists(self.master_file):
@@ -47,6 +61,16 @@ class DataConsolidator:
 
     def run_update(self):
         print(f"🔍 [DataConsolidator] Buscando actualizaciones para {self.asset}...")
+
+        # ── Verificación de integridad antes de cualquier operación ──────────
+        ok, filas_actuales, mensaje = self.verificar_master()
+        if not ok:
+            print(f"🛑 ABORTADO: {mensaje}")
+            print("   El Master Backup se encargará de recuperarlo desde Drive.")
+            print("   Este ciclo del Pipeline se saltea sin modificar nada.")
+            sys.exit(0)  # exit 0: no es un error del pipeline, es una espera
+        print(f"✅ Master verificado: {mensaje}")
+
         files_to_process = self._get_new_files_by_timestamp()
         print(f"📁 Archivos raw encontrados: {len(files_to_process)}")
 
@@ -79,7 +103,7 @@ class DataConsolidator:
                 min_rate = self.cfg.get('min_rate_confianza', 0.95)
                 df_temp = df_temp[df_temp['month_finish_rate'] >= min_rate].copy()
             else:
-                print(f"⚠️ Archivo {f} no tiene 'month_finish_rate', se omite filtro de calidad.")
+                print(f"⚠️ Archivo {f} no tiene 'month_finish_rate', se omite filtro.")
 
             if df_temp.empty:
                 continue
@@ -100,24 +124,24 @@ class DataConsolidator:
 
         if os.path.exists(self.master_file):
             df_existing = pd.read_parquet(self.master_file)
-
-
-            if len(df_new) == 0:
-                print("⚠️ df_new está vacío después de procesar. No se modifica el master.")
-                return
-
             df_final = pd.concat([df_existing, df_new], ignore_index=True)
 
-            if len(df_final) < len(df_existing):
-                print(f"🛑 ABORTADO: el nuevo master ({len(df_final)} filas) tiene menos datos "
-                      f"que el actual ({len(df_existing)} filas). No se sobreescribe.")
+            # Deduplicar — filas completamente idénticas en todas las columnas
+            antes = len(df_final)
+            df_final = df_final.drop_duplicates(keep='first')
+            if len(df_final) < antes:
+                print(f"🧹 {antes - len(df_final):,} duplicados exactos eliminados.")
+
+            # Guardia de integridad: nunca escribir menos filas de las que había
+            if len(df_final) < filas_actuales:
+                print(f"🛑 ABORTADO: el nuevo master ({len(df_final):,} filas) tiene menos "
+                      f"datos que el actual ({filas_actuales:,} filas). No se sobreescribe.")
                 return
 
-            print(f"📥 Se agregaron {len(df_new)} nuevos registros (total: {len(df_final)}).")
+            print(f"📥 Se agregaron {len(df_new):,} registros (total: {len(df_final):,}).")
         else:
             df_final = df_new
-            print(f"✨ Master creado con {len(df_final)} registros.")
-
+            print(f"✨ Master creado con {len(df_final):,} registros.")
 
         tmp_file = self.master_file + '.tmp'
         try:
