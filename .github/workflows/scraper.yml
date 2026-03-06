@@ -33,7 +33,7 @@ jobs:
           save-always: true
 
       - name: Crear carpetas necesarias
-        run: mkdir -p ml_engine/USDT
+        run: mkdir -p ml_engine/USDT ml_engine/raw
 
       - name: Recuperar master.parquet si no está en caché
         run: |
@@ -47,13 +47,13 @@ jobs:
             echo "✅ master.parquet en caché ($(stat -c%s "$FILE") bytes)"
           fi
 
-      - name: Descargar datos USDT desde Drive
+      - name: Descargar datos desde Drive
         run: |
-          rclone copy gdrive:p2p_datasets/USDT/ ./ml_engine/USDT/ \
+          rclone copy gdrive:p2p_datasets/ ./ml_engine/ \
             --checksum --verbose \
-            --exclude "master.parquet" \
-            --exclude "resultados_backtest.csv" \
-            --exclude "reporte_backtest.txt"
+            --exclude "USDT/master.parquet" \
+            --exclude "USDT/resultados_backtest.csv" \
+            --exclude "USDT/reporte_backtest.txt"
         continue-on-error: true
 
       - name: Ejecutar Scraper
@@ -70,11 +70,11 @@ jobs:
         run: python brain.py
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
-
-      - name: Subir archivos del pipeline a Drive
+          
+      - name: Subir datos a Drive
         run: |
-          rclone copy ./ml_engine/USDT/ gdrive:p2p_datasets/USDT/ \
+          rclone copy ./ml_engine/ gdrive:p2p_datasets/ \
             --checksum --verbose \
-            --exclude "master.parquet" \
-            --exclude "resultados_backtest.csv" \
-            --exclude "reporte_backtest.txt"
+            --exclude "USDT/master.parquet" \
+            --exclude "USDT/resultados_backtest.csv" \
+            --exclude "USDT/reporte_backtest.txt"
