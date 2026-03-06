@@ -2,41 +2,65 @@ name: Backtest y Optimización Diaria
 
 on:
   schedule:
-    - cron: '0 3 * * *'   # 3:00 AM UTC (00:00 ART)
+    - cron: '0 3 * * *'   # 3:00 AM UTC = 00:00 ART
   workflow_dispatch:
+
+concurrency:
+  group: backtest-diario
+  cancel-in-progress: false
 
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
 
-      - name: Configurar Python
-        uses: actions/setup-python@v5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Instalar dependencias
-        run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt
 
       - name: Configurar Rclone
         run: |
-          sudo apt-get install rclone
+          sudo apt-get install rclone -y
           mkdir -p ~/.config/rclone
           echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > ~/.config/rclone/rclone.conf
 
-      - name: Descargar datos históricos
+      - name: Crear carpetas necesarias
+        run: mkdir -p ml_engine/USDT ml_engine/contexto
+
+      - name: Descargar signals.csv desde Drive
         run: |
-          mkdir -p ml_engine
-          rclone copy gdrive:p2p_datasets/ ./ml_engine/ --verbose
+          rclone copy gdrive:p2p_datasets/USDT/signals.csv ./ml_engine/USDT/ \
+            --verbose \
+            --checksum
+
+      - name: Descargar contexto desde Drive
+        run: |
+          rclone copy gdrive:p2p_datasets/contexto/ ./ml_engine/contexto/ \
+            --verbose \
+            --checksum
+        continue-on-error: true
 
       - name: Ejecutar Backtest
-        run: python tester.py   # tu script de backtest
+        run: python backtest.py
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
-
-      - name: Subir resultados a Drive
+          
+      - name: Subir resultados del Backtest a Drive
         run: |
-          echo "📤 Subiendo resultados del backtest..."
-          rclone copy ./ml_engine/ gdrive:p2p_datasets/ --verbose
+          for archivo in \
+            "ml_engine/USDT/resultados_backtest.csv" \
+            "ml_engine/USDT/reporte_backtest.txt" \
+            "ml_engine/USDT/best.json"; do
+            if [ -f "$archivo" ]; then
+              rclone copy "$archivo" gdrive:p2p_datasets/USDT/ \
+                --verbose \
+                --checksum
+              echo "✅ Subido: $archivo"
+            else
+              echo "⚠️  No encontrado (puede no haberse generado): $archivo"
+            fi
+          done
