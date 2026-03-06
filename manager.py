@@ -16,7 +16,6 @@ class DataConsolidator:
         os.makedirs(self.base_path, exist_ok=True)
 
     def _get_last_master_timestamp(self):
-        """Obtiene el timestamp más reciente del master, convertido a datetime."""
         if not os.path.exists(self.master_file):
             return None
         try:
@@ -29,7 +28,6 @@ class DataConsolidator:
             return None
 
     def _get_new_files_by_timestamp(self):
-        """Identifica archivos raw con datos posteriores al último master."""
         last_ts = self._get_last_master_timestamp()
         pattern = os.path.join(self.raw_path, '**', 'p2p_*.parquet')
         all_files = sorted(glob.glob(pattern, recursive=True))
@@ -65,7 +63,6 @@ class DataConsolidator:
                 print(f"⚠️ Error leyendo {f}: {e}")
                 continue
 
-            # Asegurar timestamp como datetime
             if df_temp['timestamp'].dtype == 'object':
                 df_temp['timestamp'] = pd.to_datetime(df_temp['timestamp'])
 
@@ -78,7 +75,6 @@ class DataConsolidator:
             if df_temp.empty:
                 continue
 
-            # Filtro de calidad
             if 'month_finish_rate' in df_temp.columns:
                 min_rate = self.cfg.get('min_rate_confianza', 0.95)
                 df_temp = df_temp[df_temp['month_finish_rate'] >= min_rate].copy()
@@ -88,7 +84,6 @@ class DataConsolidator:
             if df_temp.empty:
                 continue
 
-            # Enriquecimiento
             if 'mep_venta' in df_temp.columns:
                 df_temp['ratio_p2p_mep'] = df_temp['precio'] / df_temp['mep_venta']
 
@@ -105,15 +100,35 @@ class DataConsolidator:
 
         if os.path.exists(self.master_file):
             df_existing = pd.read_parquet(self.master_file)
+
+
+            if len(df_new) == 0:
+                print("⚠️ df_new está vacío después de procesar. No se modifica el master.")
+                return
+
             df_final = pd.concat([df_existing, df_new], ignore_index=True)
+
+            if len(df_final) < len(df_existing):
+                print(f"🛑 ABORTADO: el nuevo master ({len(df_final)} filas) tiene menos datos "
+                      f"que el actual ({len(df_existing)} filas). No se sobreescribe.")
+                return
+
             print(f"📥 Se agregaron {len(df_new)} nuevos registros (total: {len(df_final)}).")
         else:
             df_final = df_new
-            print(f"✨ Memoria creada con {len(df_final)} registros.")
+            print(f"✨ Master creado con {len(df_final)} registros.")
 
-        df_final.to_parquet(self.master_file, compression='snappy', index=False)
 
-        # Actualizar archivo de control (opcional)
+        tmp_file = self.master_file + '.tmp'
+        try:
+            df_final.to_parquet(tmp_file, compression='snappy', index=False)
+            os.replace(tmp_file, self.master_file)
+        except Exception as e:
+            print(f"❌ Error escribiendo master: {e}")
+            if os.path.exists(tmp_file):
+                os.remove(tmp_file)
+            raise
+
         if files_to_process:
             with open(self.control_file, 'w') as f:
                 f.write(files_to_process[-1])
