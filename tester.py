@@ -311,10 +311,15 @@ class BacktestEngine:
         mejor_combo = (df_res.loc[mejor_idx, 'itc'], df_res.loc[mejor_idx, 'spread'])
         return df_res, mejor_combo
 
-    def exportar_configuracion_optima(self, resultados_opt, tipo, path_base):
-        if resultados_opt is None:
-            return
-        path   = os.path.join(path_base, self.asset, 'best.json')
+    def actualizar_best_json(self, umbrales_opt=None):
+        """
+        Siempre escribe best.json con métricas reales del backtest actual.
+        Si se pasan umbrales optimizados, los incorpora.
+        Nunca borra datos previos de otros tipos — solo actualiza lo que tiene.
+        """
+        path = os.path.join(self.data_root, self.asset, 'best.json')
+
+        # Leer best.json existente (no pisar lo que ya había)
         config = {}
         if os.path.exists(path):
             try:
@@ -322,14 +327,80 @@ class BacktestEngine:
                     config = json.load(f)
             except Exception:
                 pass
-        config[tipo] = {
-            'itc_threshold':       int(resultados_opt[0]),
-            'spread_min':          float(resultados_opt[1]),
-            'fecha_actualizacion': datetime.now().isoformat(),
-            'dias_validez':        2,
+
+        ahora = datetime.now().isoformat()
+
+        # ── Métricas reales por tipo ───────────────
+        for tipo in ['scalper', 'swing', 'estrategica']:
+            if self.resultados is None or self.resultados.empty:
+                trades_tipo = pd.DataFrame()
+            else:
+                trades_tipo = self.resultados[self.resultados['tipo'] == tipo]
+
+            # Inicializar bloque si no existe
+            if tipo not in config:
+                config[tipo] = {}
+
+            config[tipo]['fecha_actualizacion'] = ahora
+
+            if trades_tipo.empty:
+                config[tipo]['performance'] = {
+                    'trades':       0,
+                    'win_rate':     None,
+                    'ganancia_usd': 0,
+                    'nota':         'sin trades en este período',
+                }
+            else:
+                config[tipo]['performance'] = {
+                    'trades':           int(len(trades_tipo)),
+                    'win_rate':         round(float(trades_tipo['exito'].mean() * 100), 1),
+                    'ganancia_usd':     round(float(trades_tipo['ganancia_usd'].sum()), 2),
+                    'drawdown_prom':    round(float(trades_tipo['drawdown_max'].mean()), 2),
+                    'duracion_prom_h':  round(float(trades_tipo['duracion_horas'].mean()), 1),
+                    'pct_target':       round(float(trades_tipo['target_alcanzado'].mean() * 100), 1),
+                    'pct_timeout':      round(float((trades_tipo['resultado'] == 'timeout').mean() * 100), 1),
+                }
+
+        # ── Umbrales optimizados (solo si se encontraron) ─────────
+        if umbrales_opt:
+            for tipo, (itc, spread) in umbrales_opt.items():
+                if tipo not in config:
+                    config[tipo] = {}
+                config[tipo]['itc_threshold'] = int(itc)
+                config[tipo]['spread_min']    = float(spread)
+                config[tipo]['dias_validez']  = 2
+
+        # ── Metadata global ────────────────────────
+        span_h = (self.df['timestamp'].max() - self.df['timestamp'].min()).total_seconds() / 3600
+        config['_meta'] = {
+            'generado':          ahora,
+            'historia_horas':    round(span_h, 1),
+            'historia_dias':     round(span_h / 24, 1),
+            'ciclos':            int(len(self.df)),
+            'desde':             self.df['timestamp'].min().isoformat(),
+            'hasta':             self.df['timestamp'].max().isoformat(),
+            'scalper_totales':   self.scalper_totales,
+            'scalper_filtrados': self.scalper_filtrados_btc,
         }
-        with open(path, 'w') as f:
-            json.dump(config, f, indent=4)
+
+        # ── Escritura atómica ──────────────────────
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
+        os.replace(tmp, path)
+        print(f"✅ best.json actualizado → {path}")
+        for tipo in ['scalper', 'swing', 'estrategica']:
+            perf = config.get(tipo, {}).get('performance', {})
+            if perf.get('trades', 0) > 0:
+                print(f"   {tipo:12}: {perf['trades']} trades | WR {perf['win_rate']}% | ${perf['ganancia_usd']} USD")
+            else:
+                print(f"   {tipo:12}: sin trades")
+
+    def exportar_configuracion_optima(self, resultados_opt, tipo, path_base):
+        """Wrapper de compatibilidad — llama a actualizar_best_json con el umbral de un tipo."""
+        if resultados_opt is None:
+            return
+        self.actualizar_best_json(umbrales_opt={tipo: resultados_opt})
         print(f"✅ best.json actualizado para {tipo}: ITC={resultados_opt[0]}, Spread={resultados_opt[1]}")
 
     def generar_reporte(self):
@@ -478,25 +549,40 @@ if __name__ == "__main__":
     # 4. Generar y guardar reporte de texto
     engine.generar_reporte()
 
-    # 5. Optimización de umbrales (solo si hay resultados)
+    # 5. Optimización de umbrales + actualización de best.json
+    # best.json se escribe SIEMPRE con métricas reales.
+    # Los umbrales optimizados se agregan solo si hay suficientes datos.
+    umbrales_encontrados = {}
+
     if engine.resultados is not None and not engine.resultados.empty:
         rango_itc    = list(range(40, 81, 5))
         rango_spread = [0.1, 0.15, 0.2, 0.25]
 
         print("\n🔍 Optimizando SCALPER...")
-        df_opt, mejor_scalper = engine.optimizar_umbrales(
+        _, mejor_scalper = engine.optimizar_umbrales(
             rango_itc, rango_spread, tipo='scalper', metric='win_rate')
         if mejor_scalper:
             print(f"   Mejor SCALPER: ITC={mejor_scalper[0]}, Spread={mejor_scalper[1]}")
-            engine.exportar_configuracion_optima(mejor_scalper, 'scalper', CONFIG['DATA_ROOT'])
+            umbrales_encontrados['scalper'] = mejor_scalper
 
         print("\n🔍 Optimizando SWING...")
-        df_opt_swing, mejor_swing = engine.optimizar_umbrales(
+        _, mejor_swing = engine.optimizar_umbrales(
             rango_itc, rango_spread, tipo='swing', metric='win_rate')
         if mejor_swing:
             print(f"   Mejor SWING: ITC={mejor_swing[0]}, Spread={mejor_swing[1]}")
-            engine.exportar_configuracion_optima(mejor_swing, 'swing', CONFIG['DATA_ROOT'])
+            umbrales_encontrados['swing'] = mejor_swing
+
+        print("\n🔍 Optimizando ESTRATÉGICA...")
+        _, mejor_estrategica = engine.optimizar_umbrales(
+            rango_itc, rango_spread, tipo='estrategica', metric='ganancia_total')
+        if mejor_estrategica:
+            print(f"   Mejor ESTRATÉGICA: ITC={mejor_estrategica[0]}, Spread={mejor_estrategica[1]}")
+            umbrales_encontrados['estrategica'] = mejor_estrategica
     else:
-        print("\n⚠️ Sin resultados suficientes para optimizar umbrales.")
-        print("   Necesitás más historial en signals.csv. "
-              "El sistema seguirá acumulando datos automáticamente.")
+        print("\n⚠️ Sin trades simulados — best.json se actualiza con métricas vacías.")
+        print("   Necesitás más historial en signals.csv.")
+
+    # Siempre escribe best.json — con o sin optimización de umbrales
+    engine.actualizar_best_json(
+        umbrales_opt=umbrales_encontrados if umbrales_encontrados else None
+    )
