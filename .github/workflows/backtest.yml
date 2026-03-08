@@ -28,10 +28,14 @@ jobs:
       - name: Crear carpetas necesarias
         run: mkdir -p ml_engine/USDT ml_engine/contexto
 
-      - name: Descargar signals.csv desde Drive
+      - name: Descargar signals.csv y best.json desde Drive
         run: |
           rclone copy gdrive:p2p_datasets/USDT/signals.csv ./ml_engine/USDT/ \
             --checksum --verbose
+          # best.json se baja para que actualizar_best_json no pise datos previos
+          rclone copy gdrive:p2p_datasets/USDT/best.json ./ml_engine/USDT/ \
+            --checksum --verbose
+        continue-on-error: true
 
       - name: Descargar contexto desde Drive
         run: |
@@ -40,12 +44,30 @@ jobs:
         continue-on-error: true
 
       - name: Ejecutar Backtest
-        run: python tester.py
+        run: python backtest.py
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
+      # Solo sube los archivos que genera el Backtest.
+      - name: Verificar archivos generados
+        run: |
+          echo "📂 Archivos generados en ml_engine/USDT/:"
+          ls -lh ml_engine/USDT/ || echo "  (carpeta vacía)"
+          echo ""
+          for archivo in \
+            "ml_engine/USDT/resultados_backtest.csv" \
+            "ml_engine/USDT/reporte_backtest.txt" \
+            "ml_engine/USDT/best.json"; do
+            if [ -f "$archivo" ]; then
+              echo "  ✅ $archivo  ($(wc -l < $archivo) líneas)"
+            else
+              echo "  ❌ $archivo  — NO GENERADO"
+            fi
+          done
+
       - name: Subir resultados del Backtest a Drive
         run: |
+          SUBIDOS=0
           for archivo in \
             "ml_engine/USDT/resultados_backtest.csv" \
             "ml_engine/USDT/reporte_backtest.txt" \
@@ -54,7 +76,14 @@ jobs:
               rclone copy "$archivo" gdrive:p2p_datasets/USDT/ \
                 --checksum --verbose
               echo "✅ Subido: $archivo"
+              SUBIDOS=$((SUBIDOS + 1))
             else
-              echo "⚠️  No generado: $archivo"
+              echo "⚠️  No encontrado: $archivo"
             fi
           done
+          echo ""
+          echo "📤 Total subidos: $SUBIDOS/3"
+          if [ $SUBIDOS -eq 0 ]; then
+            echo "❌ ERROR: no se subió ningún archivo — revisá los logs del backtest"
+            exit 1
+          fi
