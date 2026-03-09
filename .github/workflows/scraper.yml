@@ -27,26 +27,26 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "${{ secrets.RCLONE_CONFIG }}" | base64 -d > ~/.config/rclone/rclone.conf
 
-      - name: Restaurar caché de ml_engine
+      - name: Restaurar caché de master.parquet
         uses: actions/cache@v3
         with:
-          path: ml_engine
-          key: ml-engine-${{ runner.os }}
+          path: ml_engine/USDT/master.parquet
+          key: master-parquet-${{ runner.os }}
           save-always: true
 
       - name: Crear carpetas necesarias
-        run: mkdir -p ml_engine/USDT ml_engine/raw
+        run: mkdir -p ml_engine/USDT ml_engine/raw ml_engine/contexto
 
       - name: Recuperar master.parquet si no está en caché
         run: |
           FILE="ml_engine/USDT/master.parquet"
           if [ ! -f "$FILE" ]; then
-            echo "⚠️  Caché perdido. Recuperando master.parquet desde Drive..."
+            echo "Caché perdido. Recuperando master.parquet desde Drive..."
             rclone copy gdrive:p2p_datasets/USDT/master.parquet ./ml_engine/USDT/ \
               --checksum --verbose
-            [ -f "$FILE" ] && echo "✅ Recuperado." || echo "ℹ️  No existe aún."
+            [ -f "$FILE" ] && echo "Recuperado." || echo "No existe aún (primera corrida)."
           else
-            echo "✅ master.parquet en caché ($(stat -c%s "$FILE") bytes)"
+            echo "master.parquet en caché ($(stat -c%s "$FILE") bytes)"
           fi
 
       - name: Verificar integridad de master.parquet
@@ -54,16 +54,16 @@ jobs:
         run: |
           FILE="ml_engine/USDT/master.parquet"
           if [ ! -f "$FILE" ]; then
-            echo "ℹ️  master.parquet no existe — primera corrida, se creará."
+            echo "master.parquet no existe — primera corrida."
             echo "master_ok=true" >> $GITHUB_OUTPUT
             exit 0
           fi
-          FILAS=$(python3 -c "import pandas as pd; df = pd.read_parquet('ml_engine/USDT/master.parquet', columns=['timestamp']); print(len(df))" 2>/dev/null || echo "0")
+          FILAS=$(python3 check_master.py 2>/dev/null || echo "0")
           if [ "$FILAS" -gt 0 ]; then
-            echo "✅ master.parquet OK ($FILAS filas)"
+            echo "master.parquet OK ($FILAS filas)"
             echo "master_ok=true" >> $GITHUB_OUTPUT
           else
-            echo "🛑 master.parquet corrupto o vacío. Master Backup lo recuperará."
+            echo "master.parquet corrupto o vacío."
             echo "master_ok=false" >> $GITHUB_OUTPUT
           fi
 
@@ -96,8 +96,8 @@ jobs:
       - name: Saltar Manager y Brain (master no disponible)
         if: steps.check_master.outputs.master_ok != 'true'
         run: |
-          echo "⏭️  Master corrupto o ausente. Manager y Brain salteados."
-          echo "   Los raw del scraper se suben igual para no perder datos."
+          echo "Master corrupto o ausente. Manager y Brain salteados."
+          echo "Los raw del scraper se suben igual para no perder datos."
 
       - name: Subir datos a Drive
         run: |
