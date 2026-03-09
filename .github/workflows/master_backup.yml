@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: master-backup
+  group: p2p-drive-access
   cancel-in-progress: false
 
 jobs:
@@ -58,7 +58,7 @@ jobs:
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      - name: Verificar integridad del master
+      - name: Verificar integridad y subir master.parquet
         run: |
           FILE="ml_engine/USDT/master.parquet"
           if [ ! -f "$FILE" ]; then
@@ -73,13 +73,29 @@ jobs:
             exit 1
           fi
           if [ "$POST_FILAS" -eq "$PRE_FILAS" ]; then
-            echo "ℹ️  Sin datos nuevos. No es necesario subir."
-            exit 0
+            echo "ℹ️  Sin datos nuevos en raw, pero se sube para mantener Drive sincronizado."
+          else
+            echo "✅ Master creció $((POST_FILAS - PRE_FILAS)) filas."
           fi
-          echo "✅ Master creció $((POST_FILAS - PRE_FILAS)) filas. Procediendo."
+          # Backup del master anterior antes de pisarlo
+          rclone copy gdrive:p2p_datasets/USDT/master.parquet gdrive:p2p_datasets/USDT/backups/ \
+            --backup-dir gdrive:p2p_datasets/USDT/backups \
+            --suffix "_$(date +%Y%m%d_%H%M)" \
+            --verbose || true
 
-      - name: Subir master.parquet a Drive
+          rclone copy "$FILE" gdrive:p2p_datasets/USDT/ --checksum --verbose
+          echo "✅ master.parquet subido a Drive."
+
+      - name: Limpiar backups viejos (conservar últimos 3)
         run: |
-          rclone copy ml_engine/USDT/master.parquet gdrive:p2p_datasets/USDT/ \
-            --checksum --verbose
-          echo "✅ master.parquet actualizado en Drive."
+          echo "🧹 Limpiando backups viejos..."
+          # Lista todos los backups ordenados por fecha, borra los más viejos si hay más de 3
+          rclone lsf gdrive:p2p_datasets/USDT/backups/ --format "tp" | \
+            sort -r | \
+            tail -n +4 | \
+            awk '{print $2}' | \
+            while read f; do
+              rclone delete "gdrive:p2p_datasets/USDT/backups/$f" && echo "  🗑️  Borrado: $f"
+            done
+          echo "✅ Backups actuales:"
+          rclone lsf gdrive:p2p_datasets/USDT/backups/ || echo "  (ninguno todavía)"
