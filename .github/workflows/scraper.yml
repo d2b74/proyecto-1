@@ -66,11 +66,12 @@ jobs:
             echo "master.parquet corrupto o vacío."
             echo "master_ok=false" >> $GITHUB_OUTPUT
           fi
-
       - name: Descargar datos desde Drive
         run: |
           rclone copy gdrive:p2p_datasets/ ./ml_engine/ \
             --checksum --verbose \
+            --max-age 1d \
+            --exclude "raw/**" \
             --exclude "USDT/master.parquet" \
             --exclude "USDT/resultados_backtest.csv" \
             --exclude "USDT/reporte_backtest.txt"
