@@ -77,11 +77,11 @@ jobs:
           else
             echo "✅ Master creció $((POST_FILAS - PRE_FILAS)) filas."
           fi
-          # Backup del master anterior antes de pisarlo
-          rclone copy gdrive:p2p_datasets/USDT/master.parquet gdrive:p2p_datasets/USDT/backups/ \
-            --backup-dir gdrive:p2p_datasets/USDT/backups \
-            --suffix "_$(date +%Y%m%d_%H%M)" \
-            --verbose || true
+          # Backup del master anterior antes de pisarlo (nombre con timestamp)
+          BACKUP_NAME="master_$(date +%Y%m%d_%H%M).parquet"
+          rclone copyto gdrive:p2p_datasets/USDT/master.parquet \
+            "gdrive:p2p_datasets/USDT/backups/$BACKUP_NAME" \
+            --verbose || echo "⚠️ Backup omitido (master aún no existe en Drive)"
 
           rclone copy "$FILE" gdrive:p2p_datasets/USDT/ --checksum --verbose
           echo "✅ master.parquet subido a Drive."
@@ -89,13 +89,21 @@ jobs:
       - name: Limpiar backups viejos (conservar últimos 3)
         run: |
           echo "🧹 Limpiando backups viejos..."
-          # Lista todos los backups ordenados por fecha, borra los más viejos si hay más de 3
-          rclone lsf gdrive:p2p_datasets/USDT/backups/ --format "tp" | \
-            sort -r | \
-            tail -n +4 | \
-            awk '{print $2}' | \
-            while read f; do
+          # Si la carpeta no existe todavía, no hay nada que limpiar
+          BACKUPS=$(rclone lsf gdrive:p2p_datasets/USDT/backups/ 2>/dev/null || echo "")
+          if [ -z "$BACKUPS" ]; then
+            echo "  (carpeta de backups vacía o inexistente, nada que limpiar)"
+            exit 0
+          fi
+          # Ordenar por nombre (contienen timestamp YYYYMMDD_HHMM), conservar últimos 3
+          TOTAL=$(echo "$BACKUPS" | wc -l)
+          if [ "$TOTAL" -le 3 ]; then
+            echo "  $TOTAL backup(s) — dentro del límite, nada que borrar."
+          else
+            BORRAR=$((TOTAL - 3))
+            echo "$BACKUPS" | sort | head -n "$BORRAR" | while read f; do
               rclone delete "gdrive:p2p_datasets/USDT/backups/$f" && echo "  🗑️  Borrado: $f"
             done
+          fi
           echo "✅ Backups actuales:"
-          rclone lsf gdrive:p2p_datasets/USDT/backups/ || echo "  (ninguno todavía)"
+          rclone lsf gdrive:p2p_datasets/USDT/backups/ 2>/dev/null || echo "  (ninguno)"
