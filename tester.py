@@ -66,6 +66,17 @@ class BacktestEngine:
             print(f"   ⚠️ Columna '{ctx_btc}' no encontrada. "
                   f"El filtro BTC de scalper usará 0 como default.")
 
+        # Diagnóstico de ventana futura por tipo
+        print("\n   Ventana futura disponible por tipo:")
+        ts_corte = self.df['timestamp'].max()
+        for tipo_d, t_min in self.cfg['timeouts'].items():
+            ts_limite = ts_corte - timedelta(minutes=t_min)
+            n_con_ventana = (self.df['timestamp'] <= ts_limite).sum()
+            pct = n_con_ventana / max(len(self.df), 1) * 100
+            ok_d = '✅' if pct > 10 else '⚠️'
+            print(f"   {ok_d} {tipo_d:12}: {n_con_ventana} señales con ventana "
+                  f"completa ({pct:.0f}% del dataset)")
+
         return True
 
     def _get_future_window(self, start_ts, max_minutes):
@@ -195,14 +206,27 @@ class BacktestEngine:
     def guardar_resultados(self):
         """
         Guarda self.resultados en resultados_backtest.csv.
-        Llamar explícitamente después de ejecutar_backtest().
+        SIEMPRE escribe el archivo — aunque esté vacío — para que
+        rclone detecte el cambio por timestamp y lo suba a Drive.
         """
-        if self.resultados is None or self.resultados.empty:
-            print("⚠️ No hay resultados para guardar (0 operaciones simuladas).")
-            return
-
         path = os.path.join(self.data_root, self.asset, 'resultados_backtest.csv')
         tmp  = path + '.tmp'
+
+        if self.resultados is None or self.resultados.empty:
+
+            df_vacio = pd.DataFrame([{
+                'timestamp':    datetime.now().isoformat(),
+                'tipo':         '_info',
+                'nota':         '0 operaciones simuladas en este período',
+                'historia_h':   round(
+                    (self.df['timestamp'].max() - self.df['timestamp'].min())
+                    .total_seconds() / 3600, 1),
+            }])
+            df_vacio.to_csv(tmp, index=False)
+            os.replace(tmp, path)
+            print(f"💾 resultados_backtest.csv — 0 trades (archivo actualizado) → {path}")
+            return
+
         self.resultados.to_csv(tmp, index=False)
         os.replace(tmp, path)
         print(f"💾 resultados_backtest.csv guardado: {len(self.resultados)} filas → {path}")
@@ -417,6 +441,8 @@ class BacktestEngine:
         _p("\n" + "="*70)
         _p(" 🦅 REPORTE MAESTRO DE BACKTESTING")
         _p(f" Generado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
+        span_h_rep = (self.df['timestamp'].max() - self.df['timestamp'].min()).total_seconds() / 3600
+        _p(f" Historia: {span_h_rep:.1f}h ({span_h_rep/24:.1f} días) — {len(self.df)} ciclos")
         _p("="*70)
 
         if self.resultados.empty:
@@ -520,7 +546,7 @@ if __name__ == "__main__":
         'col_señal_scalper':     'scalper_usd',
         'col_señal_swing':       'swing_usd',
         'col_señal_estrategica': 'estrategica_usd',
-        # Nombres de columnas: deben coincidir exactamente con los que escribe el Brain
+
         'cluster_vars': [
             'hora_entrada',
             'dia_semana_entrada',
@@ -535,23 +561,16 @@ if __name__ == "__main__":
 
     engine = BacktestEngine(df, cfg_bt)
 
-    # 1. Diagnóstico antes de ejecutar
     ok = engine.diagnosticar_datos()
     if not ok:
         exit(1)
 
-    # 2. Ejecutar simulación
     engine.ejecutar_backtest()
 
-    # 3. Guardar resultados como CSV (era el archivo faltante)
     engine.guardar_resultados()
 
-    # 4. Generar y guardar reporte de texto
     engine.generar_reporte()
 
-    # 5. Optimización de umbrales + actualización de best.json
-    # best.json se escribe SIEMPRE con métricas reales.
-    # Los umbrales optimizados se agregan solo si hay suficientes datos.
     umbrales_encontrados = {}
 
     if engine.resultados is not None and not engine.resultados.empty:
@@ -582,7 +601,6 @@ if __name__ == "__main__":
         print("\n⚠️ Sin trades simulados — best.json se actualiza con métricas vacías.")
         print("   Necesitás más historial en signals.csv.")
 
-    # Siempre escribe best.json — con o sin optimización de umbrales
     engine.actualizar_best_json(
         umbrales_opt=umbrales_encontrados if umbrales_encontrados else None
     )
