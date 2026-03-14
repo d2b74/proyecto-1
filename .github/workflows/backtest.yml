@@ -48,7 +48,6 @@ jobs:
         env:
           DATA_ROOT: ${{ github.workspace }}/ml_engine
 
-      # Solo sube los archivos que genera el Backtest.
       - name: Verificar archivos generados
         run: |
           echo "📂 Archivos generados en ml_engine/USDT/:"
@@ -74,7 +73,7 @@ jobs:
             "ml_engine/USDT/best.json"; do
             if [ -f "$archivo" ]; then
               rclone copy "$archivo" gdrive:p2p_datasets/USDT/ \
-                --checksum --verbose
+                --verbose
               echo "✅ Subido: $archivo"
               SUBIDOS=$((SUBIDOS + 1))
             else
